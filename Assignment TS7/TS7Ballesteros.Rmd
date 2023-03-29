@@ -1,0 +1,947 @@
+---
+output:
+  pdf_document: default
+  html_document: default
+---
+
+
+\begin{titlepage}
+   \begin{center}
+       \vspace*{1cm}
+
+       \LARGE
+       \textbf{Time Series 413, Assignment 7}
+
+       \vspace{0.5cm}
+
+       \Large
+       \textbf{Multivariate Time Series Models (TS7)}
+
+       \vspace{1.5cm}
+
+       \vfill
+
+       \Large
+       \textbf{Reed Ballesteros}
+
+       \vspace{0.8cm}
+       
+       \normalsize
+       Northwestern University SPS, Fall 2022\\
+       MSDS-413-DL\\
+       Instructor: Dr. Jamie D. Riggs, Ph.D\\
+       2022-11-07
+
+   \end{center}
+\end{titlepage}
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(MVN)
+library(fpp2)
+library(MTS)
+library(vars)
+library(ggplot2)
+source('My_Tests.R')
+```
+
+
+The file q-fdebt.txt contains the U.S. quarterly federal debts held by foreign and international investors, and federal reserve banks. The data are from the Federal Reserve Bank of St. Louis, from 1970 to 2012 for 171 observations, and not seasonally adjusted. The debts are in billions of dollars.
+
+* year: year of the debts
+* mon: starting month of the quarterly debts
+* hbfin: debt held by foreign and international investors
+* hbfrbn: debt held by federal reserve banks
+
+Your objective is to explore the time series behavior of these data sets including EDA, modeling,model diagnostics, and interpretation.
+
+## 1. Debt (30 points)
+
+Use the file q-fdebt.txt which contains the U.S. quarterly federal debts held by foreign and international investors, and federal reserve banks.
+
+### 1.1. Use EDA to justify a log transformation and a first difference transformation, zit, of each time series for $i = 1, 2$ hbfin and hbfrbn, respectively.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+data <- read.table("q-fdebt.txt",header=T)
+hbfin <- ts(data$hbfin)
+hbfrbn <- ts(data$hbfrbn)
+```
+
+<b>EDA: hbfin</b>
+
+Time series plot: hbfin
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+tHbfin <- hbfin
+autoplot(tHbfin) # non-constant variance, just higher than mean 0...?
+```
+
+Plotting the hbfin data shows the data with a 'slow' curving upward trend for the first 36 years, followed by a sharp upward increase in the last 7 years. That being said, the data does not show a mean 0 nor constant variance, and we'll need to transform the data to make it fit a proper VAR-based model.
+
+Time series plot: log(hbfin)
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+tHbfin <- log(hbfin)
+autoplot(tHbfin) # non-constant variance, just higher than mean 0...?
+```
+
+Attempting a log(hbfin) transformation does not meet Gaussian requirements such that the data still shows an upward trend in which the mean is not 0 and non-constant variance, thus showing a trend.
+
+Time series plot: diff(hbfin)
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+tHbfin <- diff(hbfin)
+autoplot(tHbfin) # non-constant variance, just higher than mean 0...?
+```
+
+While a diff(hbfin) transformation somewhat displays some non-constant variance and mean 0 in the first 28 years of data, it does not show the same for the last 14 years. 
+
+
+Time series plot: diff(log(hbfin))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+tHbfin <- diff(log(hbfin))
+autoplot(tHbfin) # non-constant variance, just higher than mean 0...?
+```
+
+While there might be some outliers around the first 3 years and year 32, the diff(log(hbfin)) transformation shows a just-above 0 mean and some pattern of constant variance. While it might not be exact, it could be close as the variance ranges from as low as -0.15 to as high as 0.27.
+
+We will continue our EDA with the diff(log(hbfin)) transformation.
+
+Histogram: diff(log(hbfin))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+hist(tHbfin)  # tall, right skewed
+```
+
+We see a tall right-skewed distribution, which does not conform to a normal Gaussian form.
+
+Q-Q Plot: diff(log(hbfin))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+qqnorm(tHbfin); qqline(tHbfin) # right side veers up, showing right skew
+```
+
+We observe very thick tails, indicating very tall Kurtosis, thus showing non-normalcy in respect to a Gaussian PDF. We can also observe right skewness due to the right tail looks thicker than the other.
+
+ACF Plot: diff(log(hbfin))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggAcf(tHbfin) # q = 4?
+```
+
+We observe a fairly stationary ACF plot with some possible cycling, but most of it is contained within the 95% confidence interval (CI) threshold.
+
+
+PACF Plot: diff(log(hbfin))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggPacf(tHbfin) # q = 4?
+```
+
+We observe a fairly stationary PACF plot, and from it we can use a possible AR(2) component.
+
+
+T-Test for Mean 0: diff(log(hbfin))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myttest(tHbfin) # between 0.028 and 0.044, mean 0.036 ---> near zero...?
+```
+
+While the 95% confidence interval (CI) range is not 0, the lower and upper bounds is relatively close to zero, as well as the calculated mean. In this case, we would call the expected mean of diff(log(hbfin)) to be very close to zero, in some ways accepted to be zero, with almost no signs of a linear trend.
+
+Skewness: diff(log(hbfin))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myskewtest(tHbfin) # very right
+```
+
+diff(log(hbfin)) has a distribution with right skewness, thus showing non-normalcy in respect to a Gaussian PDF.
+
+
+(excess) Kurtosis: diff(log(hbfin))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mykurttest(tHbfin) # tall
+```
+
+diff(log(hbfin)) has a distribution with tall (excess) Kurtosis, thus showing non-normalcy in respect to a Gaussian PDF.
+
+Constant variance: Breush-Pagan Test - diff(log(hbfin))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mybptest(tHbfin) # non-constant variance
+```
+
+Like what the plot shows, the Breusch-Pagan test confirms non-constant variance for diff(log(hbfin)).
+
+Lag Dependency: diff(log(hbfin))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+
+myboxljungtest(tHbfin) # lag dependency, has serial correlation
+```
+
+With a Box-Ljung test p-value < 0.05 for the diff(log(hbfin)) data, we observe lag dependency and thus serial autocorrelation.
+
+<b>EDA: hbfrbn</b>
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+hbfrbn <- ts(data$hbfrbn)
+```
+
+Plot: hbfrbn
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+tHbfrbn <- hbfrbn
+autoplot(tHbfrbn) # non-constant variance, just above mean 0...?
+```
+
+The plot of hbfrbn has a similar trend to that of hbfin, a 'slow' curving upward trend for the first 36 years, followed by a sharp upward increase in the last 7 years. The trend shows that there is no mean 0 and shows non-constant variance. We will conduct other transformations on the hbfrbn data to conform it towards a normal, Gaussian-like form.
+
+Plot: log(hbfrbn)
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+tHbfrbn <- log(hbfrbn)
+autoplot(tHbfrbn) # non-constant variance, just above mean 0...?
+```
+
+Taking the log of hbfrbn still shows an upward trend.
+
+Plot: diff(hbfrbn)
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+tHbfrbn <- diff(hbfrbn)
+autoplot(tHbfrbn) # non-constant variance, just above mean 0...?
+```
+
+Performing a diff(hbfrbn) might show somewhat a mean 0 and maybe some contstant variance for the first 35 years of data, but does not account for the last 7 years.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+tHbfrbn <- diff(log(hbfrbn))
+```
+
+Plot: diff(log(hbfrbn))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+autoplot(tHbfrbn) # non-constant variance, just above mean 0...?
+```
+
+Performing a diff(log(hbfrbn)) transformation displays a mean just above 0, and maybe some constant variance, despite outliers shown in the last 7 years of data. This might be the closest we can get the data to a normal Gaussian form.
+
+We will continue the EDA with the diff(log(hbfrbn)) transformation.
+
+Histogram: diff(log(hbfrbn))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+hist(tHbfrbn)  # tall right skewed
+```
+
+We can observe a slightly right-skewed, tall distribution, which does not conform to a normal Gaussian form.
+
+Q-Q Plot: diff(log(hbfrbn))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+qqnorm(tHbfrbn); qqline(tHbfrbn) # right side veers up, showing right skew
+```
+
+We observe very thick tails, indicating very tall Kurtosis, thus showing non-normalcy in respect to a Gaussian PDF. We can also observe right skewness due to the right tail looks thicker than the other.
+
+
+ACF Plot: diff(log(hbfrbn))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggAcf(tHbfrbn) # q = 1 or 5...?
+```
+
+We observe a fairly stationary ACF plot with some with some lags (5 out of 22) outside of the 95% confidence interval (CI) threshold. The max range of these exceeding lags are from -0.32 to 0.42, which could be considered relatively small.
+
+
+PACF Plot: diff(log(hbfrbn))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggPacf(tHbfrbn) # p = 1 or 6...?
+```
+
+We observe a fairly stationary PACF plot, and from it we can use a possible AR(1) or even AR(6) component.
+
+T-Test for Mean 0: diff(log(hbfrbn))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myttest(tHbfrbn) # between 0.012 and 0.028, mean 0.020 ---> near zero...?
+```
+
+While the 95% confidence interval (CI) range is not 0, the lower and upper bounds is relatively close to zero, as well as the calculated mean. In this case, we would call the expected mean of diff(log(hbfrbn)) to be very close to zero, in some ways accepted to be zero, with almost no signs of a linear trend.
+
+Skewness: diff(log(hbfrbn))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myskewtest(tHbfrbn) # right
+```
+
+diff(log(hbfrbn)) has a distribution with right skewness, thus showing non-normalcy in respect to a Gaussian PDF.
+
+(excess) Kurtosis: diff(log(hbfrbn))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mykurttest(tHbfrbn) # tall
+```
+
+diff(log(hbfrbn)) has a distribution with tall (excess) Kurtosis, thus showing non-normalcy in respect to a Gaussian PDF.
+
+Constant Variance: diff(log(hbfrbn))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mybptest(tHbfrbn) # non-constant variance
+```
+
+Like what the plot shows, the Breusch-Pagan test confirms non-constant variance for diff(log(hbfin)).
+
+Lag Dependency: diff(log(hbfrbn))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myboxljungtest(tHbfrbn) # lag dependency, serial correlation
+```
+
+With a Box-Ljung test p-value < 0.05 for the diff(log(hbfin)) data, we observe lag dependency and thus serial autocorrelation.
+
+Multivariate Normality: hbfin and hbfrbn
+
+Let us test multivariate normality for hbfin and hbfrbn:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# Test for multivariate normal
+mvn(data[,c(3,4)], mvnTest="mardia") # not normal for both hbfin, hbfrbn
+```
+
+The mvn test above shows that both hbfin and hbfrbn do not display multivariate or univariate normality, due to skewness and kurtosis for their respective data is no 0.
+
+
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+logdata <- log(data[,c(3,4)])
+z <- apply(logdata,2,diff)
+z <- data.frame(z)
+colnames(z) <- c("hbfin", "hbfrbn")
+```
+
+
+Multivariate Normality: diff(log(hbfin)) and diff(log(hbfrbn))
+
+Let us test multivariate normality for diff(log(hbfin)) and diff(log(hbfrbn)).
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mvn(z, mvnTest="mardia") # not normal for both hbfin, hbfrbn
+```
+
+The mvn test above shows that both diff(log(hbfin)) and diff(log(hbfrbn)) do not display multivariate or univariate normality, due to skewness and kurtosis for their respective data is not 0.
+
+Despite the strict non-normality, the means of diff(log(hbfin)) and diff(log(hbfrbn)) would be considered just above 0, not perfect but also not terrible to use for VAR() modelling.
+
+### 1.2. Obtain the first 5 lags of sample cross-correlation matrices of the $z_{it}$.
+
+Let us run Cross-Correlation Matrices, or ccm(), on the $z_{it}$ data:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ccm(z,5)   # test for specific cross-correlations
+```
+
+While we see positive autocorrelation on the first 4 lags of diff(log(hbfin)) and on the 1st and and 5th lag of diff(log(hbfrbn)), the plots above indicate no significant cross-correlation between the two sets of data.
+
+Let's use the Li-McLeod test to test for multivariate ARCH effects:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# Portmanteau test for multivariate time series models, Multivariate ARCH test
+MarchTest(ts(z), lag=5)
+# li-mcleod test
+# test for arch effects
+```
+
+With the Li-McLeod test p-value < 0.05, we can say the diff(log(hbfin)) and diff(log(hbfrbn)) multivariate data contains ARCH effects.
+
+### 1.3. Test $H0 : \rho_1 = ... = \rho_{10} = 0$ versus $H_a : \rho_j \neq 0$ for some $j$, where $j \in \{1,...,10\}$. Draw a conclusion using the 5% significance level.
+
+We will run an mq() test on the diff(log(hbfin)) and diff(log(hbfrbn)) multivariate data:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mq(z,10)    # test for any cross-correlations
+```
+
+All lags with a multivariate Ljung-Box test p-value < 0.05 in the above plot exhibit serial cross-correlation.
+
+## 2. GDP (30 points)
+
+Consider the growth rates, in percentages, of the quarterly real GDP of United Kingdom, Canada, and the United States located in the object __qgdp__ in the __MTS R__ package.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+data("mts-examples",package="MTS")
+dat2 <- data.frame(qgdp$uk,qgdp$ca,qgdp$us)
+colnames(dat2) <- c("uk", "ca", "us")
+logdat2 <- log(dat2)
+datgrowth <- apply(logdat2,2,diff)
+growth <- 100*datgrowth
+X <- ts(growth)
+```
+
+
+
+### 2.1. Use EDA to justify a VAR(4) model.
+
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+uk <- ts(dat2$uk)
+tUk <- X[,'uk']
+```
+
+<b>EDA: UK</b>
+
+Time series plot: uk
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+autoplot(uk) # upward trend
+```
+
+Plotting the uk data shows a general upward trend. Because of this, the data does not show a mean 0 nor constant variance, and we'll need to transform the data to make it fit a proper VAR-based model.
+
+We will transform the uk data to diff(log(uk)) and perform an EDA.
+
+Time series plot: diff(log(uk))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+autoplot(tUk) # non-constant variance, just higher than mean 0?
+```
+
+We get closer to a mean 0 using diff(log(uk)) but looks to be just above 0. The plot might not fully show constant variance but it's better than the upward trend of just using the original uk data.
+
+Histogram: diff(log(uk))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+hist(tUk)  # tall, left skewed
+```
+
+We see a tall left-skewed distribution, which does not conform to a normal Gaussian PDF.
+
+Q-Q Plot: diff(log(uk))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+qqnorm(tUk); qqline(tUk) # left side veers down, showing left skew
+```
+
+We observe a very thick left tail, indicating very tall Kurtosis, thus showing non-normalcy in respect to a Gaussian PDF. We can also observe left skewness due to the left tail looks much thicker.
+
+ACF Plot: diff(log(uk))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggAcf(tUk) # q = 4?
+```
+
+We observe a fairly stationary ACF plot.
+
+PACF Plot: diff(log(uk))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggPacf(tUk) # p = 1?
+```
+
+We observe a fairly stationary PACF plot, and from it we can use a possible AR(1) component.
+
+T-Test for Mean 0: diff(log(uk))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myttest(tUk) # between 0.40 and 0.65, mean 0.52 ---> near zero...?
+```
+
+The 95% CI might not contain 0 but the range is between 0.40 and 0.65, which is not far from zero.
+
+Skewness: diff(log(uk))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myskewtest(tUk) # very left
+```
+
+diff(log(uk)) has a distribution with left skewness, thus showing non-normalcy in respect to a Gaussian PDF.
+
+(excess) Kurtosis: diff(log(uk))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mykurttest(tUk) # tall
+```
+
+diff(log(uk)) has a distribution with tall (excess) Kurtosis, thus showing non-normalcy in respect to a Gaussian PDF.
+
+Constant Variance: diff(log(uk))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mybptest(tUk) # constant variance ?!
+```
+
+Like what the plot shows, the Breusch-Pagan test confirms non-constant variance for diff(log(uk)).
+
+Lag Dependency: diff(log(uk))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myboxljungtest(tUk) # lag dependency, has serial correlation
+```
+
+With a Box-Ljung test p-value < 0.05 for the diff(log(uk)) data, we observe lag dependency and thus serial autocorrelation.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ca <- ts(dat2$ca)
+# tCa <- diff(log(ca))
+tCa <- X[,'ca']
+```
+
+<b>EDA: CA</b>
+
+Time series plot: ca
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+autoplot(ca) # upward trend
+```
+
+Plotting the ca data shows a general upward trend. Because of this, the data does not show a mean 0 nor constant variance, and we'll need to transform the data to make it fit a proper VAR-based model.
+
+We will transform the ca data to diff(log(ca)) and perform an EDA.
+
+Time series plot: diff(log(ca))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+autoplot(tCa) # non-constant variance, just higher than mean 0...?
+```
+
+We get closer to a mean 0 using diff(log(ca)) but looks to be just above 0. The plot might not fully show constant variance but it's better than the upward trend of just using the original ca data.
+
+Histogram: diff(log(ca))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+hist(tCa)  # tall, left skewed
+```
+
+We see a tall left-skewed distribution, which does not conform to a normal Gaussian PDF.
+
+Q-Q Plot: diff(log(ca))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+qqnorm(tCa); qqline(tCa) # kinda straight, sides veer down a little...?
+```
+
+We observe a fairly straight Q-Q plot with most values lying along the ideal normal line, indicating a decent goodness-of-fit. The left tail does veer down with some outliers.
+
+ACF Plot: diff(log(ca))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggAcf(tCa) # q = 3?
+```
+
+We observe a fairly stationary ACF plot.
+
+PACF Plot: diff(log(ca))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggPacf(tCa) # p = 1? 4?
+```
+
+We observe a fairly stationary PACF plot, and from it we can use a possible AR(1) component.
+
+T-Test for Mean 0: diff(log(ca))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myttest(tCa) # between 0.48 and 0.75, mean 0.62 ---> near zero...?
+```
+
+The 95% CI might not contain 0 but the range is between 0.48 and 0.75, which is not far from zero.
+
+Skewness: diff(log(ca))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myskewtest(tCa) # left
+```
+
+diff(log(ca)) has a distribution with left skewness, thus showing non-normalcy in respect to a Gaussian PDF.
+
+(excess) Kurtosis: diff(log(ca))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mykurttest(tCa) # tall
+```
+
+diff(log(ca)) has a distribution with tall (excess) Kurtosis, thus showing non-normalcy in respect to a Gaussian PDF.
+
+Constant Variance: diff(log(ca))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mybptest(tCa) # non-constant variance
+```
+
+Like what the plot shows, the Breusch-Pagan test confirms non-constant variance for diff(log(ca)).
+
+Lag Dependency: diff(log(ca))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myboxljungtest(tCa) # lag dependency, has serial correlation
+```
+
+With a Box-Ljung test p-value < 0.05 for the diff(log(ca)) data, we observe lag dependency and thus serial autocorrelation.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+us <- ts(dat2$us)
+#tUs <- diff(log(us))
+tUs <- X[,'us']
+```
+
+<b>EDA: US</b>
+
+Time series plot: us
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+autoplot(us) # upward trend
+```
+
+Plotting the ca data shows a general upward trend. Because of this, the data does not show a mean 0 nor constant variance, and we'll need to transform the data to make it fit a proper VAR-based model.
+
+We will transform the us data to diff(log(us)) and perform an EDA.
+
+Time series plot: diff(log(us))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+autoplot(tUs) # non-constant variance, just higher than mean 0...?
+```
+
+We get closer to a mean 0 using diff(log(us)) but looks to be just above 0. The plot might possibly exhibit constant variance but it's better than the upward trend of just using the original us data.
+
+Histogram: diff(log(us))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+hist(tUs)  # tall, left skewed
+```
+
+We see a tall left-skewed distribution, which does not conform to a normal Gaussian PDF.
+
+Q-Q Plot: diff(log(us))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+qqnorm(tUs); qqline(tUs) # left tail veers down, showing left skew
+```
+
+We observe a very thick left downward tail in the Q-Q plot, showing tall left skewness.
+
+ACF Plot: diff(log(us))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggAcf(tUs) # q = 2?
+```
+
+We observe a fairly stationary ACF plot.
+
+PACF Plot: diff(log(us))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggPacf(tUs) # p = 1?
+```
+
+We observe a fairly stationary PACF plot, and from it we can use a possible AR(1) component.
+
+T-Test for Mean 0: diff(log(us))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myttest(tUs) # between 0.0051 and 0.0079, mean 0.0065 ---> near zero...?
+```
+
+The 95% CI might not contain 0 but the range is between 0.51 and 0.77, which is not far from zero.
+
+Skewness: diff(log(us))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myskewtest(tUs) # very left
+```
+
+diff(log(us)) has a distribution with left skewness, thus showing non-normalcy in respect to a Gaussian PDF.
+
+(excess) Kurtosis: diff(log(us))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mykurttest(tUs) # tall
+```
+
+diff(log(us)) has a distribution with tall (excess) Kurtosis, thus showing non-normalcy in respect to a Gaussian PDF.
+
+Constant Variance: diff(log(us))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mybptest(tUs) # constant variance...?!
+```
+
+The Breusch-Pagan test confirms constant variance for diff(log(us)).
+
+Lag Dependency: diff(log(us))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myboxljungtest(tUs) # lag dependency, has serial correlation
+```
+
+With a Box-Ljung test p-value < 0.05 for the diff(log(us)) data, we observe lag dependency and thus serial autocorrelation.
+
+Multivariate Normality: diff(log(uk)), diff(log(ca)), diff(log(us))
+
+Let us test multivariate normality for diff(log(uk)), diff(log(ca)), and diff(log(us)):
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mvn(growth, mvnTest="mardia")
+```
+
+The mvn test above shows that the diff(log(uk)), diff(log(ca)), and diff(log(us)) datasets do not display multivariate or univariate normality, due to skewness and kurtosis for their respective data are not 0.
+
+Despite the strict non-normality, the means of the diff(log(uk)), diff(log(ca)), and diff(log(us)) datasets hover just above 0, in a range from 0.52 to 0.65.  not perfect but also not terrible to use for VAR() modelling. These means might be the closest we can get to 0.
+
+Let us run Cross-Correlation Matrices, or ccm(), on the transformed GDP data:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ccm(growth,6)   # test for specific cross-correlations
+```
+
+The farthest lag we observe cross correlation is with lag 4 which has the following CCM matrix:
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+# CCM at lag:  4 
+# + . . 
+# + . . 
+# + . . 
+```
+
+This makes a viable case for a VAR(4) model, as it is the farthest matrix which displays cross-correlation interaction between all observations (in this case, the observations are countries).
+
+We will run a Multivariate Ljung-Box Q Statistics, or mq() test on the transformed multivariate GDP data:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mq(growth,10)    # test for any cross-correlations
+```
+
+All lags with a multivariate Ljung-Box test p-value < 0.05 in the above plot exhibit serial cross-correlation.
+
+Let's use the Li-McLeod test to test for multivariate ARCH effects:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+MarchTest(growth, lag=5)
+```
+
+With the Li-McLeod test p-value < 0.05, we can say the transformed GDP multivariate data contains ARCH effects.
+
+Let us perform a VARselect() on the transformed GDP multivariate data:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+X <- ts(growth)
+VARselect(X, lag.max=8, type="const")
+VARselect(X, lag.max=8, type="const")[["selection"]]   # gives optimal lag num
+```
+
+Based on the lowest AIC value, the suggested lag to use on the transformed GDP multivariate data for a model would be VAR(4).
+
+### 2.2. Fit a VAR(4) model to the series and perform model checking.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+p <- 4
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# det(SSE) =  0.01306715 
+# AIC =  -3.761654 
+# BIC =  -2.9471 
+# HQ  =  -3.430743 
+```
+
+We create the following VAR(4) model from the transformed GDP data:
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+m1 <- MTS::VAR(growth,p=p)
+```
+
+From the model summary we get an AIC of -3.761654.
+
+Model diagnostics: VAR(4) (m1) 
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# Multivariate Time Series Diagnostic Checking
+MTSdiag(m1, gof=8) # no cross-correlation
+```
+
+The model diagnostics show the model lags exhibit almost no serial cross-correlation, or very little, due to relatively stationary ccm plots and Ljung-Box p-values > 0.05, indicating lag independence.
+
+### 2.3. Simplify the model by removing insignificant parameters with type-I error rates at $\alpha = 0.05$.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# Refine a fitted VAR model by removing simultaneously insignificant parameters
+# det(SSE) =  0.01620931 
+# AIC =  -3.930169 <--- better
+# BIC =  -3.658651 
+# HQ  =  -3.819866 
+```
+
+We create the following refined VAR(4) model:
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+m2 <- refVAR(m1, thres=1.96)
+```
+
+From the model summary we get an AIC of -3.930169, which is lower than the original VAR(4) model (-3.761654).
+
+Model diagnostics: refined VAR(4) (m2)
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# Multivariate Time Series Diagnostic Checking
+MTSdiag(m2, gof=8) # no cross-correlation
+```
+
+The model diagnostics show the model lags exhibit no serial cross-correlation, or very little, due to relatively stationary ccm plots and Ljung-Box p-values > 0.05, indicating lag independence.
+
+### 2.4. From each model's diagnostics, compare the VAR(4) and the simplified models. Suggest and justify which model, if either, is best.
+
+AIC comparison: VAR(4) (m1) vs refined VAR(4) (m2)
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+m1$aic # VAR(4) 
+m2$aic # refined VAR(4)
+```
+
+BIC comparison: VAR(4) (m1) vs refined VAR(4) (m2)
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+m1$bic # VAR(4) 
+m2$bic # refined VAR(4)
+```
+
+Based on the AIC and BIC scores above and what we've seen from their summaries and diagnostics in sections 2.2 and 2.3, the refined or simplified VAR(4) model would be preferred as it has lower scores compared to the original VAR(4) model. That being said, the refined VAR(4) just edges out as the differences between them are relatively small.
+
+### 2.5. Generate a multivariate forecast from your best model.
+
+Let's create a VAR(4) forecast model for the next 10 months:
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+p <- 4
+m <- vars::VAR(X, p=p, type="const")
+mv4 <- m
+```
+
+Serial Test: VAR(4) forecast:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+serial.test(m, lags.pt=10, type="PT.asymptotic")
+# p-value = 0.5695 > 0.05 ---> Fail to reject H0, thus no multivariate serial cross-correlation 
+```
+
+The Portmanteau Test for the VAR(4) forecast model has p-value > 0.05, indicating the model has no multivariate serial cross-correlation.
+
+Let's calculate forecasts with the VAR(4) model (m1) for the next 10 months:
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+title <- sprintf("GDP Forecasts VAR(%i)", p)
+fm1 <- MTS::VARpred(m1,10)
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# create predictive time series from 
+fm1uk <- fm1$pred[,'uk']
+fm1ukPred <- ts(c(tUk,fm1uk), start=start(tUk), frequency=frequency(tUk))
+
+fm1ca <- fm1$pred[,'ca']
+fm1caPred <- ts(c(tCa,fm1ca), start=start(tCa), frequency=frequency(tCa))
+
+fm1us <- fm1$pred[,'us']
+fm1usPred <- ts(c(tUs,fm1us), start=start(tUs), frequency=frequency(tUs))
+```
+
+Let's calculate forecasts with the refined VAR(4) model (m2) for the next 10 months:
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+title <- sprintf("GDP Forecasts VAR(%i)", p)
+fm2 <- MTS::VARpred(m2,10)
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# create predictive time series from 
+fm2uk <- fm2$pred[,'uk']
+fm2ukPred <- ts(c(tUk,fm2uk), start=start(tUk), frequency=frequency(tUk))
+
+fm2ca <- fm2$pred[,'ca']
+fm2caPred <- ts(c(tCa,fm2ca), start=start(tCa), frequency=frequency(tCa))
+
+fm2us <- fm2$pred[,'us']
+fm2usPred <- ts(c(tUs,fm2us), start=start(tUs), frequency=frequency(tUs))
+```
+
+Plot the VAR(4) forecast:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+title <- sprintf("GDP Forecasts VAR(%i)", p)
+fm <- forecast(m)
+autoplot(fm) + xlab("Month") + ggtitle(title)
+```
+
+Individual plots of the VAR(4) forecasts:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+title <- sprintf("GDP Forecasts UK - VAR(4)")
+autoplot(fm1ukPred) + xlab("Month") + ggtitle(title) +
+  geom_vline(xintercept = length(tUk), col="red")
+title <- sprintf("GDP Forecasts CA - VAR(4)")
+autoplot(fm1caPred) + xlab("Month") + ggtitle(title) +
+  geom_vline(xintercept = length(tCa), col="red")
+title <- sprintf("GDP Forecasts US - VAR(4)")
+autoplot(fm1usPred) + xlab("Month") + ggtitle(title) +
+  geom_vline(xintercept = length(tUs), col="red")
+
+```
+
+Plot the individual refined VAR(4) forecasts for each country:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+title <- sprintf("GDP Forecasts UK - Refined VAR(4)")
+autoplot(fm2ukPred) + xlab("Month") + ggtitle(title) +
+  geom_vline(xintercept = length(tUk), col="red")
+title <- sprintf("GDP Forecasts CA - Refined VAR(4)")
+autoplot(fm2caPred) + xlab("Month") + ggtitle(title) +
+  geom_vline(xintercept = length(tCa), col="red")
+title <- sprintf("GDP Forecasts US - Refined VAR(4)")
+autoplot(fm2usPred) + xlab("Month") + ggtitle(title) +
+  geom_vline(xintercept = length(tUs), col="red")
+
+```
+
+While we do not have 80% and 95% confidence interval forecasts for the refined VAR(4) model, we can compare the point forecasts for each country between the VAR(4) and refined VAR(4) models.
+
+Generally speaking, when comparing the point forecasts between the VAR(4) model and the refined VAR(4) model, the patterns are very similar to each other, such that both sets of forecasts have a small upward spike in the first half of the forecast. But the VAR(4) forecasts have a somewhat general upward trend in the second half while the refined VAR(4) forecasts have a somewhat general downward trend.
+
+## 3. Report (20 points) 
+
+### Write an executive summary of the outcomes of your GDP analysis.
+
+(We will use the refined VAR(4) model for the executive summary, as we found it to have better/lower AIC and BIC scores.)
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+title <- sprintf("GDP Forecasts UK - Refined VAR(4)")
+autoplot(fm2ukPred) + xlab("Month") + ggtitle(title) +
+  geom_vline(xintercept = length(tUk), col="red")
+title <- sprintf("GDP Forecasts CA - Refined VAR(4)")
+autoplot(fm2caPred) + xlab("Month") + ggtitle(title) +
+  geom_vline(xintercept = length(tCa), col="red")
+title <- sprintf("GDP Forecasts US - Refined VAR(4)")
+autoplot(fm2usPred) + xlab("Month") + ggtitle(title) +
+  geom_vline(xintercept = length(tUs), col="red")
+```
+
+The forecasting model we developed attempts to predict the gross domestic product (GDP) for the next 10 quarters in the United Kingdom, Canada, and the United States. The data is sourced from the the Multivariate Time Series (MTS) package available in the R programming language, which contains quarterly GDP data for the three countries from the first quarter of 1980 to the second quarter of 2011. The forecast is based on multivariate time series modelling which explores the possibility where the GDP of one country could be correlated to the GDP of other countries. While transforming the GDP data for each country to help fit our time series analysis, we present a forecast model based on the logged differenced transformation of each country's GDP data and the cross-correlation interactions found between the countries.
+
+In each respective country's GDP plots above, the forecast is shown at the right side of the red vertical line. Generally speaking, the forecast for each country looks to have a small spike upwards within the first half of quarterly forecasts, then gently taper downwards towards the end of the second half. While we are forecasting 10 months of GDP predictions, we would recommend using this model as a short-term guide. That being said, this is a forecast of the transformed data and doesn't fully represent the original non-transformed data. But if we align the transformed data along with the GDP data, we can see large downward spikes in the transformed data coincide with dips in the GDP, while general volatility in the transformed data align with a general upward trend in the GDP. We can see this happen, for example, with the Canada GDP data below. As the forecast doesn't have large downward spikes we can at least not anticipate a dip in GDP in the short term.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+title <- sprintf("GDP Forecasts CA - Refined VAR(4)")
+autoplot(fm2caPred) + xlab("Month") + ggtitle(title) +
+  geom_vline(xintercept = length(tCa), col="red")
+
+autoplot(ca) + ggtitle("Canada GDP") + xlab("Month")# upward trend
+
+```
+
+This is what we are able to present given the multivariate time series modelling tools we currently have available. We will continue to improve this model as our knowledge base expands to provide longer term and more accurate forecasts.
+

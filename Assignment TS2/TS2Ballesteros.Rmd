@@ -1,0 +1,763 @@
+---
+output:
+  pdf_document: default
+  html_document: default
+---
+
+
+\begin{titlepage}
+   \begin{center}
+       \vspace*{1cm}
+
+       \LARGE
+       \textbf{NU Time Series 413, Assignment 2}
+
+       \vspace{0.5cm}
+
+       \Large
+       \textbf{Introduction to Gaussian-Based Time Series Models (TS2)}
+
+       \vspace{1.5cm}
+
+       \vfill
+
+       \Large
+       \textbf{Reed Ballesteros}
+
+
+       \vspace{0.8cm}
+       
+       \normalsize
+       Northwestern University SPS, Fall 2022\\
+       MSDS-413-DL\\
+       Instructor: Dr. Jamie D. Riggs, Ph.D\\
+       2022-10-03
+
+   \end{center}
+\end{titlepage}
+
+
+```{r setup, include=FALSE, echo=FALSE, warning=FALSE, message=FALSE}
+# setup and load libraries
+knitr::opts_chunk$set(echo = TRUE)
+library(ggplot2)
+library(DescTools)
+library(lmtest)
+library(ggplot2)
+library(fBasics)
+library(fpp3)
+library(forecast)
+library(urca)
+library(fUnitRoots)
+library(TSA)
+source('BusCycle.R')
+source('parameterTest.R')
+```
+
+
+```{r include=FALSE, warning=FALSE, message=FALSE}
+var.CI = function(data, conf.level = 0.95) {
+	df = length(data) - 1
+	chilower = qchisq((1 - conf.level)/2, df)
+	chiupper = qchisq((1 - conf.level)/2, df, lower.tail = FALSE)
+	v = var(data)
+	x <- c(df * v/chiupper, v, df * v/chilower)
+	names(x) <- c("lower.ci", "variance", "upper.ci")
+	return(x)
+	}
+```
+
+
+## 1. EDA (16 points)
+
+Consider the monthly series of Consumer Sentiment from the University of Michigan. This survey series is widely used to indicate the consumer confidence about the U.S. economy. The data are available from Surveys of Consumers from the University of Michigan. The sample period may be determined from the earliest and latest dates of the data set.
+
+1.1. Import the data and identify the years and months for which the sentiment data are missing. Remove the missing data records.
+
+After importing the tbmics.csv data, we want to check to see if it a valid time series dataset.
+
+```{r include=FALSE, warning=FALSE, message=FALSE}
+UMCSENT <- read.csv("tbmics.csv",header=T,stringsAsFactors=F)
+summary(UMCSENT)
+nrow(UMCSENT)
+```
+
+```{r include=FALSE, warning=FALSE, message=FALSE}
+# Working data
+W <- UMCSENT
+
+# Convert month name to digit
+Mon <- match(W$Month, month.name)
+month <- paste0(as.character(W$YYYY),"-",as.character(Mon),"-01")
+lt <- as.POSIXlt(as.Date(month))
+num <- lt$year*12 + lt$mon
+W$mon.num <- num - min(num)
+head(W$mon.num)
+dt <- diff(W$mon.num)
+head(dt,n=100)
+not1 <- max(which(dt!=1))
+
+# Remove rows that are not 1 month apart from each other
+W$Index <- W$ICS_ALL
+X <- W[(not1+1):nrow(W),-3]
+head(X)
+str(X)
+
+rm(Mon, month, lt, num, dt, not1)
+```
+
+Test $H_{10}: x_{it}, \; i \in \{1,2\}, \; t \in \{1,2,...,n\}$ versus $H_{1a}: not \, H_{10}$ that the observations are a time-ordered sequence where $x_{1t} = total\_cases$ and $x_{2t} = population$.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+length(unique(W$mon.num))
+length(W$mon.num)
+```
+
+There are 622 unique dates for all the 622, indicating a time ordered sequence within the dataset.
+
+Test $H_{20}: (t+1) - t = c, t \in \{1,2...,n\}$ versus $H_{2a}: not \, H_{20}$ that all the successive observations of both $x_{it}$ and $x_{2t}$ have equal time spans between them.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+nrow(W)
+difW <- diff(W$mon.num)
+table(difW)
+```
+
+From the test above we see varying lengths of time spans in the dataset, in which we will remove data that are more than one month from another datapoint.
+
+After removing the data, we will retest $H_{10}: x_{it}, \; i \in \{1,2\}, \; t \in \{1,2,...,n\}$ versus $H_{1a}: not \, H_{10}$ that the observations are a time-ordered sequence where $x_{1t} = total\_cases$ and $x_{2t} = population$.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+length(unique(X$mon.num))
+length(X$mon.num)
+```
+With the reduced data, there are 530 unique dates for all the remaining observations, again indicating a time-ordered sequence within the dataset.
+
+Retest $H_{20}: (t+1) - t = c, t \in \{1,2...,n\}$ versus $H_{2a}: not \, H_{20}$ that all the successive observations of both $x_{it}$ and $x_{2t}$ have equal time spans between them.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# nrow(X)
+difX <- diff(X$mon.num)
+table(difX)   # nrow - 1?
+```
+
+Retesting now shows only one length of time occurs within the dataset, which is a one-month span, indicating all 
+
+1.2. As per Assignment 1, perform a complete EDA on the subset data with no missing records. This includes interpretations and an assessment of whether a log transformation, differencing, or both are necessary.
+
+Time Series Summary: Index
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+basicStats(X$Index)   # gives excess kurtosis
+```
+
+The median of 89.3 is not equal to the mean of 85.93, and is also not within the 95% CI of the LCL and UCL means, which suggests the data is not symmetrical and does not conform to a Gaussian PDF. The mean at zero also is another sign that the data does not conform to a Gaussian PDF.
+
+
+Time series plot: Index to mon.num
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+plot1 <- ggplot() + geom_line(data = X, aes(x = mon.num, y = Index))
+plot1
+```
+
+This seems to be a fairly random time series plot, but we will perform other plots and tests to check if it is.
+
+
+Time Series Q-Q Plot: Index
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+qqplot1 <- ggplot(X, aes(sample=Index)) +
+	stat_qq() +
+	stat_qq_line()
+qqplot1
+```
+
+Most of the Q-Q Plot of Index lies around the ideal normal distribution line but the ends deviate in opposite directions which indicate some negative Kurtosis (lower values of x are in the upper plane of the ideal normality line while higher values of ax are in the lower plane).
+
+Time Series Histogram: Index
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+hist1 <- ggplot(X, aes(x=Index)) + 
+        geom_histogram(aes(y=..density..), bins=30) + 
+        geom_density(alpha=0.6)
+hist1
+```
+
+The distribution of Index is not normal as it heavily skews left and Kurtosis, based on density, looks to be fairly flat.
+
+Index: Skewness
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+Skew(X$Index, method = 3, conf.level = 0.05, ci.type = "norm", R = 1000)
+```
+
+Though we saw it in the histogram, the skewness is -0.41 which suggests left skewness and lies within the 95% CI range that does not contain zero, which suggests the data is not symmetric and doesn't conform to a Gaussian PDF.
+
+Index: Kurtosis
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+Kurt(X$Index, method = 3, conf.level = 0.05, ci.type = "norm", R = 1000)
+```
+
+Though we saw it in the histogram, the Kurtosis is -0.58 which lies within the 95% CI range that doesn't include zero, and suggests thin tails relative to a Gaussian PDF, demonstrating non-normality.
+
+Index: test for mean 0
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+t.test(X$Index)   # get CI for mean
+```
+
+Index mean at 85.93 is not zero and therefore does not conform to a Gaussian PDF.
+
+Decomposition:
+
+```{r include=FALSE, warning=FALSE, message=FALSE}
+df <- data.frame(mon.num=X$mon.num, Index=X$Index)
+stl_period <- findfrequency(ts(df[,2])) #4? 12?
+#ts_df <- ts(df[,2], start=df[1,1],frequency=stl_period)
+#ts_df <- ts(df[,2], start=df[1,1],frequency=4)
+ts_df <- ts(df[,2], start=df[1,1],frequency=12)
+decomp <- stl(ts_df, s.window="periodic")
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+decomp_plot1 <- autoplot(decomp)
+decomp_plot1
+```
+The STL decomposition splits the time series into trend, seasonal, and remainder components.
+
+We will perform an EDA on the remainder.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# get remainder
+remainder <- decomp$time.series[,3]   # remainder
+rem_df <- rbind(data.frame(remainder=remainder, x=remainder))
+```
+
+Plot of remainder decomposition:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+plot(remainder)
+```
+The plot shows that the mean of the remainder might be near 0 but also shows non-constant variance.
+
+Q-Q Plot of remainder decomposition:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggplot(rem_df, aes(sample=remainder)) +
+	stat_qq() +
+	stat_qq_line()
+```
+While the Q-Q Plot has most of the dataset on the ideal normality line, the ends deviate from it in opposite directions which indicate some high Kurtosis (lower values of x are in the lower plane of the ideal normality line while higher values of ax are in the upper plane), which might not ideally conform to a Gaussian PDF.
+
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggplot(rem_df, aes(x=remainder)) + 
+        geom_histogram(aes(y=..density..), bins=30) + 
+        geom_density(alpha=0.6)
+```
+Visually the histogram of remainder look to be fairly symmetrical which suggests zero skewness (conforms to Gaussian PDF) but has a fairly high peak which suggest high Kurtosis, which does not conform to Gaussian PDF.
+
+Remainder t-test of mean 0:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+t.test(remainder)
+```
+The t-test suggests that even though the mean of the remainder is 0.0018, the 95% CI contains zero and the high p-value suggests that the mean is statistically zero, which conforms to a Gaussian PDF.
+
+Remainder: skewness
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+Skew(remainder, method = 3, conf.level = 0.05, ci.type = "norm", R = 1000)
+```
+The calculated skewness of -0.007 lies within the 95% CI for skewness, which makes the skewness statistically zero and makes the remainder data symmetrical and conforms to the Gaussian PDF.
+
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+Kurt(remainder, method = 3, conf.level = 0.05, ci.type = "norm", R = 1000)
+
+```
+The calculated Kurtosis of 0.83 and lies within the 95% CI for Kurtosis, which confirms that the distribution of the remainder to have fairly thick tails, which does not conform to the Gaussian PDF.
+
+The high kurtosis of the remainder distribution suggests that the remainder is not Gaussian despite its other attributes meet Gaussian requirements quite well.
+
+Remainder autocorrelation and lag independence:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggAcf(remainder)
+```
+
+The remainder shows correlation at lags 1, 2, 5, and 8, indicating autocorrelation and lag dependency, and thus, not white noise.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+Box.test(remainder,lag=27,type='Ljung') 
+```
+The Box-Ljung test using 27 lags (based on the ACF plot above) results in a very small p-value which is less than 0.05 suggests that the remainder values are not independent, and indicates autocorrelation is present within.
+
+Index trend autocorrelation:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+Index <- ts(X$Index)   # make a time series object
+ggAcf(Index)
+```
+The ACF plot shows that the Index data is not stationary, as none of the 27 lags are significantly greater than zero and well over the stationary 95% CI. This suggests that we should transform the Index data which can result in a more stationary time series, such as differencing, which we will perform in part 2.
+
+
+## 2. Accounting for a Linear Trend in the Time Series (16 points)
+
+Continuing with the Consumer Sentiment of the University of Michigan, denote the sentiment index as $x_t = Index$. Let $d_t = x_{t+1} - x_t$ or let $d_t = log(x_{t+1}) - log(x_t)$ depending on what you determined from your EDA.
+
+2.1. For the transformed series of the sentiment data, test the hypothesis $H_0 : \mu = 0$ vs: $Ha : \mu \neq 0$; i.e., the expected change of sentiment is zero versus the alternative that the expected change is non-zero. Interpret the test outcome.
+
+```{r include=FALSE, warning=FALSE, message=FALSE}
+d <- diff(Index)
+# or
+d_log <- diff(log(Index))
+```
+
+Let us plot the differences of Index, diff(Index):
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+plot(d)
+```
+
+Compared to the original plot of the data, plotting the difference (d) looks like we've removed the linear trend, as this time series transformation looks to be mostly white noise, with a rate high and low spike.
+
+We can mathematically test that we've removed the trend by performing a t-test on the difference, diff(Index):
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+t.test(d)         # H0: mean = 0 vs. Ha mean != 0
+```
+
+With the mean of diff(Index) at -0.04 along with the mean 95% CI contains 0 indicates that the first difference mean is zero along with a p-value 0.8207 which is greater tahn 0.05. We fail to reject that null hypothesis that the mean is 0 and implies that we've removed the linear trend.
+
+Testing independence of diff(Index):
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+Box.test(d,lag=27,type='Ljung') 
+```
+The test statistic is 43.351 with 27 degrees of freedom, and the p-value is 0.0241, which is lower than 0.05. Thus, we reject the null hypothesis that the values of diff(Index) are independent and therefore are not independent and implies autocorrelation.
+
+2.2. Is the transformed time series a Gaussian time series? Justify your answer.
+
+We've tested that the mean of diff(Index) is statistically 0 in section 2.1, in which it also conforms to a Gaussian PDF.
+
+```{r include=FALSE, warning=FALSE, message=FALSE}
+# wrap d into dataframe to be used for ggplot()
+df_d = rbind(data.frame(diff=d, x=d))
+```
+
+Histogram of diff(Index):
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggplot(df_d, aes(x, fill=diff)) + 
+        geom_histogram(aes(y=..density..), bins=30) + 
+        geom_density(alpha=0.6) +
+        scale_x_continuous() + scale_y_continuous()
+```
+The histogram looks to be slightly left-skewed, just off from symmetrical, and therefore doesn't conform to a Gaussian PDF in a strict sense. The data seems to be highly peaked, suggesting high Kurtosis and thick tails, also suggesting it might not conform to a Gaussian PDF.
+
+Q-Q Plot of diff(Index):
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+qqnorm(d, pch = 1, frame = FALSE)
+qqline(d, col = "steelblue")
+```
+
+The Q-Q shows that much of the data lies on the ideal normality line but the ends deviate in opposite positions of the ideal normality line suggesting a higher distribution peak, or high Kurtosis (the lower theoretical quantiles are in the lower plane of the ideal normality line while the higher quantiles are in the upper plane), which means it might not confirm to a Gaussian PDF in that regard.
+
+Skewness of diff(Index):
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+Skew(d, method = 3, conf.level = 0.05, ci.type = "norm", R = 1000)
+```
+
+Negative skewness of a non-zero value -0.238 and falls left of the skewness 95% CI, suggests non-symmetry and left skewness, and therefore does not conform to a Gaussian PDF. We can visually see this left skewness in the histogram above.
+
+Kurtosis of diff(Index):
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+Kurt(d, method = 3, conf.level = 0.05, ci.type = "norm", R = 1000)
+```
+High Kurtosis of 1.438, which is not zero, and falls left of the Kurtosis 95% CI, suggests thick tails of the distribution which doesn't conform to a Gaussian PDF. We can visually see this Kurtosis in the histogram and the Q-Q plot.
+
+From the t-test performed in section 2.1 the mean 95% CI contains zero and along with the high p-value suggests that the mean is statistically 0, which conforms to the Gaussian PDF.
+
+The non-zero skewness and Kurtosis suggests a distribution that is left-tailed, non-symmetric, tall distribution, and diverging Q-Q Plot doesn't conform to a Gaussian PDF despite its zero mean.
+
+
+## 3. Identifying Autocorrelation, Stationarity, and White Noise (16 points)
+
+With the Consumer Sentiment data:
+
+3.1. Construct a mean model $d_t = \mu$ and give the parameter estimates. Interpret the estimates. Give the model degrees of freedom (df) which includes counting the intercept, the order of $p$, $d$, and $q$.
+
+
+```{r include=FALSE, warning=FALSE, message=FALSE}
+#m <- auto.arima(d, stationary=FALSE,seasonal=FALSE)
+m <- Arima(d,order=c(0,0,0),include.mean=T)
+#m <- arima(d,order=c(0,0,0),include.mean=T)
+```
+
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+summary(m)
+```
+
+Based on the ARIMA summary model above, the mean model is:
+
+$$
+d_{t} = -0.0395 + \varepsilon
+$$
+with 529 degrees of freedom, based on the 530 observations minus the mean intercept and such that p, d, and q in the ARIMA model are all zero.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+d %>% ggtsdisplay()
+checkresiduals(m)
+```
+The residuals plot visually exhibit potentially a mean near zero but non-constant variance. The ACF plot has two lags outside of the 95% CI, showing signs of auto correlation and lag dependence. The histogram looks to be slightly left skewed and therefor slightly non-symmetric. The peak of the distribution looks relatively high, indicating high Kurtosis.
+
+3.2. Perform model checking on the fitted model. Interpret the diagnostics for autocorrelation, stationarity, independence of lags, and normality of the residuals.
+
+Autocorrelation of mean model: ACF and PACF plots
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggAcf(resid(m))
+ggPacf(resid(m))
+```
+The ACF and PACF plots for the residuals of the mean model visually suggest significant correlation at lags 2 and 5, in which we reject the null hypothesis that all correlations for the set of lags are statistically zero, therefore at least one lag is significantly greater than zero (in this case, lags 2 and 5), and indicates autocorrelation.
+
+Stationarity of mean model: KPSS Test
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# Test or unit roots. If no roots, stationary under H0
+# KPSS test, H0: no unit roots vs. Ha unit roots
+# Value <= critical, fail to reject
+kpss <- ur.kpss(resid(m),type="tau",lags="short")
+summary(kpss)    # If test stat <= 5pct, fail to reject
+```
+The R function ur.kpss function test statistic of 0.0356 is less than the critical value of 0.146 (5% level) for 6 lags which indicates no unit roots so there is no linear trend and hence the first difference series is trend stationary.
+
+Stationarity of mean model: Augmented Dickey-Fuller Test
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+adfTest(resid(m),lags=5,type="nc")
+```
+The Augmented Dickey-Fuller Test results in a test statistic of -11.2509 for lag order 5 and a p-value of 0.01 < 0.05 which indicates we reject the null hypothesis of unit roots so there are no unit roots. Hence, the mean model series is stationary.
+
+Mean model: constant variance with the McLeod-Li test
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+McLeod.Li.test(m)   # Ha: any lags <= 0.05?
+```
+The McLeod-Li test for the mean model shows that lags 1, 2, 8, 9, 10, 11, and 13 have test statistics less than 0.05 which means we fail the null hypothesis of homoscedasticity, and thus have non-constant variance. Instead, there exists heteroscedasticity within the mean model.
+
+Mean Model residual plots and Box-Ljung test:
+
+```{r echo=FALSE, warning=FALSE}
+checkresiduals(m)
+```
+The mean model residuals plot in the diagram above visually exhibit potentially a mean near zero but non-constant variance, which can mean the residuals exhibit heteroscedasticity. The histogram looks to be slightly left skewed and therefore slightly non-symmetric. The peak of the distribution looks relatively high, indicating high Kurtosis. 
+
+The Ljung-Box test statistic of 43.35 on 27 degrees of freedom and p-value of 0.0241 < 0.05 shows that for 27 lags, the correlation coefficients are are not all zero which implies lag dependence.
+
+The heteroscedasticity, lag dependence left skewness, and high kurtosis derived from the diagram above visually imply signs that the residuals might not be a normal distribution in regards to a Gaussian PDF, and therefore not Gaussian as well.
+
+3.3. What are the business cycles in consumer sentiment? What do they mean?
+
+Checking for business cycles: build polynomial
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+(p2 <- c(1,-m$coef))
+(s2 <- polyroot(p2))    # if no imaginary part, no cycles
+```
+The mean model is able to build a real root of -25.311+0i, which does not have an imaginary component. Since this is the only root returned and it does not have an imaginary component, there are no business cycles present in the mean model.
+
+```{r include=FALSE, warning=FALSE, message=FALSE}
+source('BusCycle.R')
+(z = unique(sapply(all_complex(s2),period)))
+z
+```
+The BusCycle.R code returns an empty list when calling the all_complex() method with a list only containing the root with no imaginary component, further confirming no business cycles are present in the mean model.
+
+3.4. Is the first difference mean model a white noise process? Justify your answer.
+
+The Box-Ljung test performed in section 3.2 the small p-value 0.0241 < 0.05 of the residuals suggest the difference mean model might not be a white noise process due to lag dependence. Section 3.2 also performed the  McLeod-Li test in which several lags are below the 0.05 p-value threshold which implies no constant variance.
+
+Signs of lag dependence and non-constant variance implies that the mean model is not a white noise process.
+
+
+## 4. Autoregressive (AR) Models (16 points)
+
+Still with the Consumer Sentiment data:
+
+4.1. Test the null hypothesis $H_0 : p_1 = p_2 = \:...\: = p_{12} = 0$ versus the alternative $H_a : p_i \neq 0$ for some $i \in \{1,2\}$ autocorrelation coefficients for the transformed time series data from part 2. Compare this with the ACF and PACF of the $d_t$ series.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+Box.test(d,lag=12,type='Ljung') 
+```
+The test statistic is 43.351 with 27 degrees of freedom, and the p-value is 0.0241, which is lower than 0.05. Thus, we reject the null hypothesis that the values of diff(Index) are independent and therefore are not independent and implies autocorrelation.
+
+ACF and PACF Plots: diff(Index)
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggAcf(d) + ggtitle("ACF Plot: diff(Index)")
+ggPacf(d) + ggtitle("PACF Plot: diff(Index)")
+```
+
+The ACF and PACF plots of diff(Index) suggest significant correlation with lags 2 and 5 crossing the 95% CI, while the rest of the data is stationary, showing a 2 in 27 chance (7.4%) which is greater than 5% suggesting the crossings might not be random, thus the series might not be considered stationary in the strict sense, but just barely. It lines up with the Box-Ljung test above which exhibits lag dependence and autocorrelation.
+
+4.2. Construct an AR(12) model, $d_t = \phi_1 d_{t-1} + \:...\: + \phi_{12} d_{t-12}$, and assess the fit with model diagnostics. Give the model degrees of freedom (_df_).
+
+The AR(12) model:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+m2 <- Arima(d,order=c(12,0,0),include.mean=F)
+summary(m2)
+```
+From the AR(12) ARIMA model above we have the following equation: $d_t = - 0.0389d_{t-1} - 0.1404d_{t-2} - 0.0618d_{t-3} - 0.0598d_{t-4} -0.1452 d_{t-5} + 0.0131d_{t-6} - 0.0404 d_{t-7} + 0.0354 d_{t-8} + 0.0524 d_{t-9} - 0.0455 d_{t-10} - 0.0152 d_{t-11} + 0.0626 d_{t-12}$
+
+With 518 degrees of freedom, based on the 530 observations minus the the autoregression level (p=12)  of the ARIMA model.
+
+Skewness of AR(12) residuals:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+Skew(resid(m2), method = 3, conf.level = 0.05, ci.type = "norm", R = 1000)
+```
+The negative skewness suggests a left skewed, non-symmetrical distribution of AR(12) residuals, and does not confirm to a Gaussian PDF.
+
+Kurtosis of AR(12) residuals:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+Kurt(resid(m2), method = 3, conf.level = 0.05, ci.type = "norm", R = 1000)
+```
+The negative skewness suggests highly peaked distribution of AR(12) residuals, and does not confirm to a Gaussian PDF.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+checkresiduals(m2,lag=24)
+```
+
+The Box-Ljung test gives a t-statistic of 0.774 > 0.05, which indicates the residuals of the AR(12) ARIMA model are independent and exhibit no correlation. The diagram above show a stationary ACF plot with all 27 lags statistically 0 since all of them are within the ACF 95% CI. The histogram visually displays a nearly symmetric distribution through skewness near zero but might have a high peak through high Kurtosis. The plot of the residuals visually might imply mean near zero but with no constant variance.
+
+Stationarity of AR(12): KPSS Test
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# Test or unit roots. If no roots, stationary under H0
+# KPSS test, H0: no unit roots vs. Ha unit roots
+# Value <= critical, fail to reject
+kpss <- ur.kpss(resid(m2),type="tau",lags="short")
+summary(kpss)    # If test stat <= 5pct, fail to reject
+```
+
+The R function ur.kpss function test statistic of 0.0424 is less than the critical value of 0.146 (5% level) for 6 lags which indicates no unit roots so there is no linear trend and hence the first difference series is trend stationary.
+
+Stationarity of AR(12): Augmented Dickey-Fuller Test
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+adfTest(resid(m2),lags=27,type="nc")
+```
+
+The Augmented Dickey-Fuller Test results in a test statistic of -5.1878 for lag order 5 and a p-value of 0.01 < 0.05 which indicates we reject the null hypothesis of unit roots so there are no unit roots. Hence, the mean model series is stationary.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+McLeod.Li.test(m2)   # Ha: any lags <= 0.05?
+```
+
+The McLeod-Li test for the AR(12) shows that lags 1, 2, 8, 9, 10 and 11 have test statistics less than 0.05 which means we fail the null hypothesis of homoscedasticity, and thus have non-constant variance. Instead, there exists heteroscedasticity within the mean model.
+
+AR(12) Business Cycles:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+(p3 <- c(1,-m2$coef))
+(s3 <- polyroot(p3))
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+(z3 = unique(round(sapply(all_complex(s3),period),digits=3)))   # lengths of business cycles
+```
+
+The AR(12) model has six business cycles, 6.5-month, 3-month, 10.6-month, 4-month, and 2.4-month cycles, which indicates we need an additive function to account for these cycles, since these business cycles show the residuals of AR(12) is not white noise.
+
+4.3. Compare the AR(12) model with the mean model from part 3 by giving your preference with a justification.
+
+AIC: AR(12) vs mean model:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+sprintf("AIC mean model: %0.3f", round(AIC(m), 3))
+sprintf("AIC AR(12): %0.3f", round(AIC(m2), 3))
+```
+AR(12) has a lower AIC of 2965.696 compared to the mean model AIC of 2972.932, favoring AR(12) as it has a lower value.
+
+BIC: AR(12) vs mean model:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+sprintf("BIC mean model: %0.3f", round(BIC(m), 3))
+sprintf("BIC AR(12): %0.3f", round(BIC(m2), 3))
+```
+
+AR(12) has a higher BIC of 3021.218 compared to the mean model AIC of 2981.474, favoring the mean model as it is a lower value. That being said, BIC is known to have a parsimony bias towards simpler models.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+print("mean model accuracy:")
+accuracy(m)
+print("AR(12) accuracy:")
+accuracy(m2)
+```
+
+Based on the model accuracy statistics above, AR(12) has a lower RMSE of 3.893568 compared to the mean model RMSE of 4.003766, favoring AR(12).
+
+Due to the AIC and RMSE advantage I would choose AR(12) over the mean model.
+
+4.4. Simplify the fitted AR by removing parameter estimates with p-values greater than 0.05 using the __fixed__ option in the __arima__ function. Is the model adequate? Why?
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+c1 <- c(0,NA,0,0,NA,0,0,0,0,0,0,0)
+m3 <- Arima(d,order=c(12,0,0),include.mean=F,fixed=c1)
+summary(m3)
+```
+
+The simplified AR(12) model is:
+
+$$
+d_t =  - 0.1303d_{t-2} - 0.12752 d_{t-5}
+$$
+With 528 degrees of freedom, based on the 530 observations minus the two parameters, ar2 and ar5.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+checkresiduals(m3,lag=24)
+t.test(resid(m3))
+```
+
+The residuals of simplified AR(12) look like it might not have constant variance but might have mean zero. In the ACF plot all lags are within the 95% CI, implying the coefficients of these lags are statistically zero. The distribution looks to be slightly left skewed indicating non-symmetry and a high-peak Kurtosis. The left skew and high Kurtosis indicate the residuals of the simplified AR(12) model does not conform to a Gaussian PDF. The T-test with a p-value 0.7926 > 0.05 and the 95% CI contains zero implies that the mean of the residuals is statistically zero, which we could visually infer from the residuals time series plot.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+Skew(resid(m3), method = 3, conf.level = 0.05, ci.type = "norm", R = 1000)
+```
+
+We calculate that the simplified AR model does have left skewness.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+Kurt(resid(m3), method = 3, conf.level = 0.05, ci.type = "norm", R = 1000)
+```
+
+We calculate that the simplified AR model does have high-peaked Kurtosis.
+
+Compared with the residuals of the original AR(12), the simplified AR(12) model perform slightly worse but have similar distributions and time series plots, and the lags of their respective ACF and PACF plots are statistically zero. It could be possible that the simplified AR(12) model is adequate enough to use over the AR(12) model, but we will perform more in-depth comparisons in section 4.7.
+
+
+4.5. What are the simplified model's business cycles? Are they different from the AR(12) model?
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+(p4 <- c(1,-m3$coef))
+(s4 <- polyroot(p4))
+```
+
+The polyroot indicates the simplified AR model has two complex roots, indicating two business cycles.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+(z = unique(round(sapply(all_complex(s4),period),digits=3)))   # lengths of business cycles
+```
+
+We find that we have a 9.2-month and a 3.4 month business cycle, much less than the six business cycles of the AR(12) model. Because of these cycles we will look into adding an additive function to the model, as the presence of business cycles indicate that the residuals of the simplified AR(12) is not white noise.
+
+4.6. Compare the simplified model with the mean model. In terms of model diagnostics, which model is preferred? Justify your choice.
+
+AIC: AR(12) vs mean model:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+sprintf("AIC simplified AR(12): %0.3f", round(AIC(m3), 3))
+sprintf("AIC mean model: %0.3f", round(AIC(m), 3))
+```
+Simplified AR(12) has a lower AIC of 2957.847 compared to the mean model AIC of 2972.932, favoring simplified AR(12) as it has a lower value.
+
+BIC: AR(12) vs mean model:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+sprintf("BIC simplified AR(12): %0.3f", round(BIC(m3), 3))
+sprintf("BIC mean model: %0.3f", round(BIC(m), 3))
+```
+
+AR(12) has a lower BIC of 2970.660 compared to the simplified AR(12) BIC of 2981.474, favoring  simplified AR(12) as it is a lower value.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+print("simplified AR(12) accuracy:")
+accuracy(m3)
+print("mean model accuracy:")
+accuracy(m)
+```
+
+Based on the model accuracy statistics above, simplified AR(12) has a lower RMSE of 3.939189 compared to the mean model RMSE of 4.003766, favoring simplified AR(12).
+
+I would choose simplified AR(12) over the mean model as the simplified AR(12) has lower and more favorable AIC, BIC, and RMSE values.
+
+4.7. Compare the simplified model with the AR(12) model. In terms of model diagnostics and in-sample fitting, which model is preferred? Justify your choice.
+
+AIC: AR(12) vs mean model:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+sprintf("AIC AR(12): %0.3f", round(AIC(m2), 3))
+sprintf("AIC simplified AR(12): %0.3f", round(AIC(m3), 3))
+```
+AR(12) has a lower AIC of 2965.696 compared to the simplified AR(12) AIC of 2957.847, favoring the simplified AR(12) as it has a lower value.
+
+BIC: AR(12) vs mean model:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+sprintf("BIC AR(12): %0.3f", round(BIC(m2), 3))
+sprintf("BIC simplified AR(12): %0.3f", round(BIC(m3), 3))
+```
+AR(12) has a higher BIC of 3021.218 compared to the simplified AR(12) VIC of 2970.660, favoring  simplified AR(12) as it is a lower value. That being said, BIC is known to have a parsimony bias towards simpler models.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+print("AR(12) accuracy:")
+accuracy(m2)
+print("simplified AR(12) accuracy:")
+accuracy(m3)
+```
+Based on the model accuracy statistics above, AR(12) has a lower RMSE of 3.893568 compared to the simplified AR(12) RMSE of 3.939189, favoring AR(12).
+
+While AR(12) has the advantage in RMSE while simplified AR(12) has the advantage in AIC, I might favor AIC over RMSE due to that RMSE is a non-penalizing metric that yields a better value with more explanatory variables. Therefore, I would prefer simplified AR(12) over the AR(12).
+
+That being said, the AIC values for both models are relatively high, and the difference between them is just about one percent from each other, which seems to be a small improvement overall in that regard.
+
+
+## 5. Report (16 points)
+
+Describe your choice of consumer sentiment model as if to a lay stakeholder; i.e, what are the forecasts and what do they mean? The report requires information from which the stakeholder can make decisions or take action, and not encumbered with statistics jargon.
+
+(We will be using the simplified AR(12) model which was preferred over the AR(12) model in section 4.7 to perform a forecast.)
+
+```{r include=FALSE, warning=FALSE, message=FALSE}
+# Use your choice of m2 or m3
+m3p <- predict(m3,4)   # prediction 1 to 4-step ahead
+```
+
+```{r include=FALSE, warning=FALSE, message=FALSE}
+cs3 <- ts(cumsum(c(Index[1],c(d,m3p$pred))))
+(lcl3 <- cs3[(length(cs3)-3):length(cs3)]-1.96*m3p$se)
+(ucl3 <- cs3[(length(cs3)-3):length(cs3)]+1.96*m3p$se)
+```
+
+Based on the current time series tools and tests available, we present the following forecast of the consumer sentiment index of the US economy:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+c2 <- c(0,NA,0,0,NA,0,0,0,0,0,0,0)
+m5 <- Arima(Index,order=c(12,1,0),include.mean=F,fixed=c2)
+
+#summary(m5)
+#checkresiduals(m5,lag=24)
+
+fc5 <- forecast(m5,h=30)
+autoplot(fc5) + 
+	ggtitle("Consumer Sentiment Index of the US Economy (Source: University of Michigan)") +
+	geom_vline(xintercept = nrow(X), col="red") +
+	xlab("Month by Year Index") + ylab("Sentiment Index")
+```
+This forecasting model attempts to predict the consumer sentiment (or confidence) index of the next 30 months based on 530 consecutive months of consumer sentiment index time series data obtained from the University of Michigan, from January 1978 to January 2022. This model is based on a forecasting model originally consisting of twelve parameters fitted by the time series data and has been optimized and simplified down to two. 
+
+The forecast model shows the dark blue line barely deviating from the last Index value of the original time series plot at 67.2 from January of 2022, with an 80% confidence level (CI) interval shown by the dark blue area, and a 95% CI expanded by the lighter blue area. Unfortunately the range of these confidence intervals are quite wide, where the range of the 95% CI is larger than the range of the time series. The range of the confidence intervals expand as the future forecast month is further ahead. Based on these confidence intervals, the forecast of the index over the next thirty months could be anything that was shown before, or even lower than that, especially for months further ahead.
+
+The forecasting model in its current form is not very useful in predicting future consumer index based on the tools and testing methodologies we have at our disposal. That being said, we might have a rough idea to anticipate a somewhat small range of very short-term future consumer sentiment forecasts for at most the next three to four months. From those insights we can adjust short-term business plans that could be affected by this accordingly or as needed.
+
+Moving forward, as our toolset expands and our knowledge base and skillset grows hopefully we can develop a more useful and accurate forecast model from our time series datasets. This initial model is just a start and will be an iterative process for improvement as we learn more over time.

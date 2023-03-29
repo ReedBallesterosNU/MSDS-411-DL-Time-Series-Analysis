@@ -1,0 +1,1339 @@
+---
+output:
+  pdf_document: default
+  html_document: default
+---
+
+
+\begin{titlepage}
+   \begin{center}
+       \vspace*{1cm}
+
+       \LARGE
+       \textbf{Time Series 413, Assignment 6}
+
+       \vspace{0.5cm}
+
+       \Large
+       \textbf{Volatility Models (TS6)}
+
+       \vspace{1.5cm}
+
+       \vfill
+
+       \Large
+       \textbf{Reed Ballesteros}
+
+       \vspace{0.8cm}
+       
+       \normalsize
+       Northwestern University SPS, Fall 2022\\
+       MSDS-413-DL\\
+       Instructor: Dr. Jamie D. Riggs, Ph.D\\
+       2022-10-31
+
+   \end{center}
+\end{titlepage}
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ggplot2)
+library(TSA)
+library(forecast)
+library(fpp2)
+library(fGarch)
+library(quantmod)
+library(nortsTest)
+library(devtools)
+source('My_Tests.R')
+source('Igarch.R')
+source('garchM.R')
+source('Tgarch11.R')
+```
+
+
+The following list defines the data sets and their respective variables. The daily returns of Microsoft stock ($msft$) stock for the period given in the starter R script. The data are available from yahoo! finance (https://finance.yahoo.com/quote/MSFT/history?p=MSFT) and in the file __MSFT.csv__. "Date" "Open" "High" "Low" "Close" "Adj.Close" "Volume"
+
+* Date: year month day
+* Open: daily opening price
+* High: daily high
+* Low: daily low
+* Close: daily closing price
+* Adj.Close: adjusted daily closing price
+* Volume: daily volume
+
+The monthly returns of Boeing (BA) stock for the period given in the starter R script. The data are available from yahoo! finance (https://finance.yahoo.com/quote/BA/history?p=BA) and in the file __BA.csv__.
+
+* Date: year month day
+* Open: monthly opening price
+* High: monthly high
+* Low: monthly low
+* Close: daily closing price
+* Adj.Close: adjusted monthly closing price
+* Volume: monthly volume
+
+
+## 1. MSFT (30 points)
+
+
+Consider the daily returns (msft) of Microsoft stock from January 4, 2010 to April 17, 2020. Construct time series models of the Microsoft daily adjusted closing price as follows.
+
+```{r include=FALSE, warning=FALSE, message=FALSE}
+symbol.vec <- c("MSFT","BA")
+getSymbols(symbol.vec, from ="2010-01-04", to = "2022-09-30")
+```
+
+```{r include=FALSE, warning=FALSE, message=FALSE}
+MSFT <- MSFT[, "MSFT.Adjusted", drop=F]
+X <- as.data.frame(MSFT)
+names(X) <- "Adjusted"
+```
+
+
+### 1.1. Use EDA on the msft daily log returns. Is the expected log return zero? Why? Are there any serial correlations in the log returns? Why?
+
+```{r include=FALSE, warning=FALSE, message=FALSE}
+msft <- ts(diff(log(X$Adjusted)))
+```
+
+Let us plot the msft daily log returns:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+plot(msft) # looks like constant variance?, mean not zero
+```
+
+The plot of log(msft) may show mean 0, and the outliers in the plot might display non-contant variance.
+
+Histogram - log(msft):
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+hist(msft) # fairly even-skewed, tall
+```
+
+We can observe a left-skewed, tall distribution, thus showing non-normalcy in respect to a Gaussian PDF.
+
+Q-Q Plot - log(msft):
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+qqnorm(msft); qqline(msft)# signs of kurt
+```
+
+We can observe very thick tails, indicating very tall Kurtosis, thus showing non-normalcy in respect to a Gaussian PDF.
+
+ACF Plot - log(msft):
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggAcf(msft) # q = 1?
+```
+
+We observe a fairly stationary ACF plot, and from it we determine to use an MA(1) component for an ARMA model.
+
+PACF Plot - log(msft):
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggPacf(msft) # p = 1?
+```
+
+We observe a fairly stationary ACF plot, and from it we determine to use an AR(1) component for an ARMA model.
+
+T-Test Mean of Zero - log(msft):
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# 1.1 - Is the expected log return zero?
+myttest(msft) # Very close to zero! [0.0001589344,0.0012770451], 0.0007179897 I'd say it's zero.
+```
+
+While the 95% confidence internval (CI) does not include 0, the lower and upper bounds are quite close to zero, as well as the mean of x. In this case, we would call the expected mean of log(msft) to be very close to zero, in some ways accepted to be zero, with alsmot no signs of a linear trend.
+
+Normalcy: Skewness - log(msft):
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myskewtest(msft) # left
+```
+
+The log(msft) data has a distribution with left skewness, thus showing non-normalcy in respect to a Gaussian PDF.
+
+Normalcy: (excess) Kurtosis - log(msft):
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mykurttest(msft) # tall
+```
+
+The log(msft) data has a distribution with tall (excess) Kurtosis, thus showing non-normalcy in respect to a Gaussian PDF.
+
+Constant Variance: Breusch-Pagan Test log(msft)
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mybptest(msft) # non-constant variance, heteroscedastic 
+```
+
+While we can see signs of non-constant variance in the time series plot, the Breusch-Pagen test confirms it.
+
+Correlation: Box-Ljung test - log(msft)
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# 1.1 - Are there any serial correlations in the log returns?
+myboxljungtest(msft) # lag dependency, autocorrelation since p-value < 0.05
+```
+
+With a Box-Ljung test p-value < 0.05 for the log(msft) data, we observe lag dependency and thus serial autorrelation.
+
+
+### 1.2. Write a mean model (arima to forecast expected values) to be fitted based on your EDA. Construct a mean model for the log returns. Is there an ARCH effect in the log return series? Why?
+
+We create the following mean model based on the EDA above using AR(1) and MA(1):
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+p <- 1; d <- 0; q <- 1
+m <- Arima(msft,order=c(p,d,q),include.mean=TRUE)
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+m12 <- m
+rs <- resid(m)
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+summary(m)
+```
+
+Based on the summary above, we create the following equation:
+
+$$
+y_{t} = \phi_1 y_{t-1} +  \theta_1 z_{t-1} + \mu
+$$
+
+Let us perform model diagnostics.
+
+Check residuals:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+checkresiduals(rs) # mean 0, non-constant variance, fairly stationary (5-6 lag spikes?), tall/slightly left-skewed
+```
+
+From the plots above, we observe a fairly plot showing constant variance and mean 0 (we will test to confirm below). The ACF plot looks fairly stationary, while the distribution looks to be slightly left skewed with very tall Kurtosis around mean 0.
+
+Stationarity: PACF Plot
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggPacf(rs) # looks stationary?
+```
+
+The PACF plot further supports stationarity for the model.
+
+Mean Zero: T-Test
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myttest(rs) # mean 0
+```
+
+The 95% CI contains zero, therefore the mean is statistically 0 and the linear trend is removed.
+
+Normalcy: Skewness
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myskewtest(rs) # left
+```
+
+The model has exhibits left skewness, showing non-normalcy in respect to a Gaussian PDF.
+
+Normalcy: (excess) Kurtosis
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mykurttest(rs) # tall
+```
+
+The model has exhibits tall (excess) Kurtosis, showing non-normalcy in respect to a Gaussian PDF.
+
+Constant Variance: McLeod-Li Test
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mymcleodlitest(m) # *NON*-constant variance, heteroscedastic
+```
+
+The model exhibits non-constant variance with many lags with a p-value of under 0.05.
+
+Lag independence: Box-Ljung test
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myboxljungtest(rs) # lag independence, no autocorrelation
+```
+
+Box-Ljung test shows model has lag dependence and therefore serial autocorrelation.
+
+Stationarity: ADF test
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myadftest(rs) # is stationary
+```
+
+The ADF test shows the model is stationary.
+
+Stationarity: KPSS
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mykpsstest(rs) # is stationary
+```
+
+The KPSS test shows the model is stationary.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# 1.2 Is there an ARCH effect in the log return series?
+#arch.test(rs,arch="box",alpha=0.05,lag.max = 2)   # arch effects? change lag.max
+#arch.test(rs,arch="box",alpha=0.05,lag.max = 2)   # arch effects? change lag.max
+myboxljungarchtest(rs,lags=2) # lag independence, no autocorrelation
+```
+
+The Box-Ljung ARCH(m) test results in a p-value < 0,05 for the model, implying non-constant variance, possible variance clustering, which results with ARCH effects present.
+
+### 1.3. Fit a Gaussian ARMA-GARCH volatility model to the log return series. Obtain the normal QQ-plot of the standardized residuals, and write the model to be fitted. Is the model adequate? Persistent? Why?
+
+We create the following mean model based on the EDA above using AR(1) and MA(1):
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+m <- garchFit(~arma(1,1)+garch(1,1),data=msft,trace=F)  # arma from EDA
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+m13 <- m
+resi <- m@residuals
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+summary(m)
+```
+
+Based on the summary above, we create the following equation:
+
+$$
+r_t = \omega + \phi_1 y_{t-1} +  \theta_1 z_{t-1} + \beta_1 \sigma^2_{t-1|t-2} + \alpha_1 a^2_{t-1} + \mu
+$$
+
+Adding the $\alpha$ and $\beta$ coefficients together:
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+sum(coef(m)[(length(coef(m))-1):(length(coef(m)))]) # 0.9084379 - slow to revert back to mean
+```
+
+The combined value is 0.9084, which is near 1, which makes the model's volatility slow to revert back to mean.
+
+Let us perform model diagnostics.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+autoplot(ts(resi))
+```
+
+The plot may exhibit mean 0 and possible constant variance.
+
+Stationarity: ACF plot for residuals
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggAcf(resi) # relatively stationary?
+```
+
+The ACF plot looks fairly stationary.
+
+Stationarity: ACF plot for squared residuals
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggAcf(resi^2) # serial autocorrelation in squared residuals up to lag 16
+```
+
+The ACF plot above for the squared residuals display serial autocorrelation in squared residuals up to lag 16.
+
+Q-Q Plot:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+qqnorm(resi); qqline(resi)# signs of kurt - thick tails - thick tails mean doesn't fit too well
+```
+
+The thick tails in the Q-Q plot my indicate a not-so-well goodness-of-fit.
+
+Lag independence: Box-Ljung test
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myboxljungtest(resi,lags=10) # lag independence, no autocorrelation
+```
+
+The Box-Ljung test shows the model contains lag dependency and thus serial autocorrelation.
+
+ARCH effects: Box-Ljung ARCH test
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myboxljungarchtest(resi,lags=10) # lag independence, no autocorrelation
+```
+
+The Box-Ljung ARCH(m) test results in a p-value < 0,05 for the model, implying non-constant variance, possible variance clustering, which results with ARCH effects present.
+
+Mean Zero: T-Test
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myttest(resi) # mean 0
+```
+
+The 95% CI contains zero, therefore the mean is statistically 0 and the linear trend is removed.
+
+Normalcy: Skewness
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myskewtest(resi) # left
+```
+
+The model has exhibits left skewness, showing non-normalcy in respect to a Gaussian PDF.
+
+Normalcy: (excess) Kurtosis
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mykurttest(resi) # tall
+```
+
+The model has exhibits tall (excess) Kurtosis, showing non-normalcy in respect to a Gaussian PDF, as well as a not-so-well goodness-of-fit.
+
+Stationarity: ADF test
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myadftest(resi) # is stationary
+```
+
+The ADF test shows the model is stationary.
+
+Stationarity: KPSS
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mykpsstest(resi) # is stationary
+```
+
+The KPSS test shows the model is stationary.
+
+
+
+### 1.4. Build an ARMA-GARCH model with Student-t innovations ($cond.dist="std"$) for the log return series. Perform model checking and write the model to be fitted.
+
+We create the following mean model based on the EDA above using AR(1) and MA(1):
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+m <- garchFit(~arma(1,1)+garch(1,1),data=msft,trace=F,cond.dist="std")
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+m14 <- m
+resi <- m@residuals
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+summary(m)
+```
+
+
+Adding the $\alpha$ and $\beta$ coefficients together:
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+sum(coef(m)[(length(coef(m))-1):(length(coef(m))-2)]) # 0.9084379 - slow to revert back to mean
+```
+
+The combined value is 0.9723, which is even closer to 1, which makes the model's volatility even slower to revert back to the mean.
+
+Let us perform model diagnostics.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+autoplot(ts(resi))
+```
+
+The plot may exhibit mean 0 and possible non-constant variance.
+
+Stationarity: ACF plot for residuals
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggAcf(resi) # relatively stationary?
+```
+
+The ACF plot looks fairly stationary.
+
+Stationarity: ACF plot for squared residuals
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggAcf(resi^2) # serial autocorrelation in squared residuals up to lag 16
+```
+
+The ACF plot above for the squared residuals display serial autocorrelation in squared residuals up to lag 16.
+
+Q-Q Plot:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+qqnorm(resi); qqline(resi)# signs of kurt - thick tails - thick tails mean doesn't fit too well
+```
+
+The thick tails in the Q-Q plot my indicate a not-so-well goodness-of-fit.
+
+Lag independence: Box-Ljung test
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myboxljungtest(resi,lags=10) # lag independence, no autocorrelation
+```
+
+The Box-Ljung test shows the model contains lag dependency and thus serial autocorrelation.
+
+ARCH effects: Box-Ljung ARCH test
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myboxljungarchtest(resi,lags=10) # lag independence, no autocorrelation
+```
+
+The Box-Ljung ARCH(m) test results in a p-value < 0,05 for the model, implying non-constant variance, possible variance clustering, which results with ARCH effects present.
+
+Mean Zero: T-Test
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myttest(resi) # mean 0
+```
+
+The 95% CI contains zero, therefore the mean is statistically 0 and the linear trend is removed.
+
+Normalcy: Skewness
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myskewtest(resi) # left
+```
+
+The model has exhibits left skewness, showing non-normalcy in respect to a Gaussian PDF.
+
+Normalcy: (excess) Kurtosis
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mykurttest(resi) # tall
+```
+
+The model has exhibits tall (excess) Kurtosis, showing non-normalcy in respect to a Gaussian PDF, as well as a not-so-well goodness-of-fit.
+
+Stationarity: ADF test
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myadftest(resi) # is stationary
+```
+
+The ADF test shows the model is stationary.
+
+Stationarity: KPSS
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mykpsstest(resi) # is stationary
+```
+
+The KPSS test shows the model is stationary.
+
+
+
+
+
+### 1.5. Obtain 1-step to 90-step ahead mean and volatility forecasts using the fitted ARMA-GARCH model with Student-t innovations.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# 1.5
+pm <- predict(m,90)
+#head(pm)
+pred <- c(ts(msft), pm$meanForecast)
+autoplot(pred) +
+  ggtitle("Daily Microsoft Returns") +
+  geom_vline(xintercept = length(msft), col="red") +
+  xlab("Day") + ylab("Return")
+```
+
+The predicted values for redisuals of the differenced log(msft) data doesn't match the volatility shown in the origial residuals plot. The predicted values lie just above the statistically zero mean.
+
+### 1.6. As the estimated coefficient of the mean equation is small, we may ignore the mean equation; i.e., use the mean equation $r_t = a_t$. Fit an IGARCH(1) model to the log returns. Write the model to be ftted.
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+m <- Igarch(msft)
+```
+
+The beta component's coefficient of the IGARCH(1) model is 0.9634, near 1, which indicates the model's volatility might be slower to reach the mean.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+m16 <- m
+```
+
+
+```{r  echo=FALSE, warning=FALSE, message=FALSE}
+# 1.6
+summary(m) # beta 0.96337150 - almost 1
+```
+
+Based on the summary above, the equation is:
+
+$$
+\sigma^2_{t|t-1} = \beta \sigma^2_{t-1|t-2} + (1-\beta)^2_{t-1} 
+$$
+
+
+### 1.7. Let $\sigma_t$ be the fitted volatility of the IGARCH(1) model. Define the standardized residuals as $\epsilon_t = r_t/\sigma_t$ , where rt is the daily log return. Is serial correlation in the standardized residuals present? Persistent? Why?
+
+Calculate the standardized residuals:
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+sigma.t <- m$volatility
+resi <- msft/sigma.t
+```
+
+Plotting the $\sigma_t$ residuals:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+autoplot(resi)
+```
+
+From the plot we see a zero mean, and due to the outliers, non-constant variance.
+
+Q-Q Plot:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# 1.7 Define the standardized residuals
+qqnorm(resi); qqline(resi)# signs of kurt - thick tails, not great fit
+```
+
+The thick tails of the IGARCH(1,1) indicate a not a not-too-great goodness-of-fit.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# 1.7 Is serial correlation in the standardized residuals present?
+ggAcf(resi) # 
+```
+
+The ACF plot shows the IGARCH(1) model of the standardized residuals is fairly stationary.
+
+Serial Autocorrelation: Box-Ljung test
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myboxljungtest(resi,lags=10) # low p-value < 0.05 ---> serial correlation
+```
+
+The Box-Ljung test indicates lag dependency in the standardized residuals of the IGARCH(1) model, therefore serial correlation is also present.
+
+### 1.8. Is serial correlation in the squares of the standardized residuals present? Why?
+
+ACF Plot: squares of standardized residuals
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# 1.8 Is serial correlation in the squares of the standardized residuals present?
+ggAcf(resi^2) # shows serialized correlation up to lag 16
+```
+
+The ACF plot of the squares of the standardized residuals show the model is stationary.
+
+Box-Ljung ARCH Test:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myboxljungarchtest(resi,lags=10) # low p-value < 0.05 ---> serial correlation
+```
+
+The Box-Ljung ARCH test indicates no volatility of the squares of the standardized residuals of the IGARCH(1) model, therefore serial correlation is not present. This is due to the model's high p-value > 0.05.
+
+Mean test for 0:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myttest(resi) # mean not 0
+```
+
+While the 95% CI does not contain zero, the upper and lower bounds are values that are small and close to zero.
+
+Nirmacly: Skewness
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myskewtest(resi) # left
+```
+
+The IGARCH(1) model contains left skewness, thus not normal.
+
+Normalcy: Kurtosis
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mykurttest(resi) # tall
+```
+
+The IGARCH(1) model has tall Kurtosis, thus not normal. But this calculated Kurtosis seems to be smaller than the other models tested so far, maybe implying a better goodness-of-fit.
+
+Stationarity: ADF Test
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myadftest(resi) # is stationary
+```
+
+The IGARCH(1) model is stationary based on the ADF test.
+
+Stationarity: KPSS Test
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mykpsstest(resi) # is stationary
+```
+
+The IGARCH(1) model is stationary based on the ADF test.
+
+
+
+### 1.9. Based on the model checking, is the IGARCH model adequate? If yes, obtain 1-step to 5-step ahead volatility forecasts for the log return series (forecast origin is the last data point).
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# 1.9 Based on the model checking, is the IGARCH model adequate? - Yes 
+# 1.9 obtain 1-step to 5-step ahead volatility forecasts for the log return series
+pred <- msft
+for (i in 1:5) {
+  length(pred)
+  v1 <- (1-m$par)*pred[length(pred)]^2 + m$par*sigma.t[length(pred)]^2
+  sqrt(v1)
+  pred <- c(pred,sqrt(v1))
+}
+
+
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+autoplot(ts(pred)) +
+  ggtitle("Microsoft Volatility") +
+  geom_vline(xintercept = length(msft), col="red") +
+  xlab("Day") + ylab("Return")
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+autoplot(ts(tail(pred,n=90))) +
+  ggtitle("Microsoft Volatility") +
+  geom_vline(xintercept = (length(tail(pred,n=90))-5), col="red") +
+  xlab("Day") + ylab("Return")
+```
+
+The IGARCH(1) seems to be an adequate model, due to its ability to show some short-term activity similar to the pre-existing trends, unlike what the other models were able to do. Based on its lower kurtosis it could be considered to have a better goodness-of-fit.
+
+
+### 1.10. Which model do you recommend and why?
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# 1.10 Which model do you recommend and why?
+# - IGarch model - best-fitting 
+# - other models had high alpha + beta values around 0.9 to 0.97, suggesting to try 
+#   IGarch model; 
+```
+
+The high alpha + beta values near 1 of the ARMA/GARMA models suggest that we should try to fit the data to an IGARCH(1) model. When testing the IGARCH(1) model we find it to have a better goodness of fit due to its lower Kurtosis, and its forecast plot seems to mimic some of the previous MSFT stock activity after volatility has been considered.
+
+## 2. Boeing returns (30 points)
+
+
+Consider the monthly returns of Boeing ($ba$) stock.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+BA <- BA[, "BA.Adjusted", drop=F]
+X <- as.data.frame(BA)
+names(X) <- "Adjusted"
+```
+
+
+
+### 2.1. Use EDA on the BA monthly closing prices. Is the expected ba log return zero? Why? Is there serial correlation in the log returns? Why? Is there any ARCH effect in the log returns? Why?
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# 2.1 Use EDA on the BA monthly closing prices
+ba <- ts(diff(log(X$Adjusted)))
+```
+
+Plot of log(ba):
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+plot(ba) # non-constant variance, mean not zero
+```
+The plot of log(ba) looks to have mean 0 but non-constant variance.
+
+Histogram: log(ba)
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+hist(ba) # left skewed, tall
+```
+
+The ditribution looks tall and slightly left skewed, thus not normal.
+
+Q-Q plot: log(ba)
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+qqnorm(ba); qqline(ba)# signs of skew/kurt
+```
+
+The thick tails indicate tall Kurtosis, therefore not normal.
+
+ACF Plot: log(ba)
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggAcf(ba) # q = 2?
+```
+
+The ACF plot suggests to use a MA(2) component in an ARMA model.
+
+ACF Plot: log(ba)
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggPacf(ba) # p = 2?
+```
+
+The PACF plot suggests to use a AR(2) component in an ARMA model.
+
+T-Test for mean 0: log(ba)
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# 2.1 Is the expected ba log return zero? - yes
+myttest(ba) # mean 0
+```
+
+The 95% CI contains zero, therefore the mean is statistically 0 and ther linear trend removed.
+
+Normalcy: Skewness - log(ba)
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myskewtest(ba) # left
+```
+
+The skewness of log(ba) is left-skewed, thus not normal.
+
+Normalcy: Kurtosis - log(ba)
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mykurttest(ba) # tall
+```
+
+The distribution of log(ba) has tall Kurtosis, thus not normal.
+
+Constant Variance: Breusch-Pagan Test - log(ba)
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mybptest(ba) # non-constant variance, heteroscedastic 
+```
+
+As we've seen in the plot, the log(ba) data has non-constant variance via the Breusch-Panan test.
+
+Serial Correlation: Box-Ljung test - log(ba)
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# 2.1 Is there serial correlation in the log returns? - yes
+myboxljungtest(ba) # lag dependency, autocorrelation
+```
+
+The Box-Ljung test implies lag dependency, thus the log(ba) data has serial correlation.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+at <- ba-mean(ba)
+```
+
+Box-Ljung ARCH test: log(ba)
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# 2.1 Is there any ARCH effect in the log returns? - yes
+myboxljungarchtest(at,lags=12) # implies *NON*-constant variance over 12 lags, ARCH effects present,
+# possible clustering, volatility, heteroscedastic -> reject H0
+# p-value < 0.05 ----> serial correlation
+```
+
+The Box-Ljung ARCH test suggests that ARCH effects are present in the log(ba) data due to its small p-value < 0.05.
+
+### 2.2. Build a GARCH model with Gaussian innovations for the log return series. Perform model checking and write the model to be fitted.
+
+We create the following GARCH model.
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+m <- garchFit(~garch(1,1),data=ba,trace=F)
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# 2.2 Build a GARCH model with Gaussian innovations for the log return series.
+m22 <- m
+resi <- m@residuals
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# 2.2 Write the model to be fitted.
+summary(m)
+```
+
+Based on the summary above, we have the following model:
+
+$$
+\sigma^2_{t|t-1} = \omega + \beta_1 \sigma^2_{t-1|t-2} + \alpha_1 a^2_{t-1} + \mu
+$$
+
+Adding the alpha and beta coefficients give us the following:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# Your EDA-determined model
+sum(coef(m)[(length(coef(m))):(length(coef(m))-1)]) # 0.9793682 almost 1, slow for volatility to revert back to mean
+# 2.2 Perform model checking and write the model to be fitted.
+```
+
+The combined value of 0.9793 suggests the model volatility would be slow to revert back to the mean, but overall the volatility is persistent.
+
+We will conduct model diagnostics.
+
+Plot:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+autoplot(resi)
+```
+
+We notice mean zero but also non-constant variance.
+
+Histogram:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+hist(resi) # left skewed, tall
+```
+
+We can see tall, left skewness, suggesting that the distribution is not normal.
+
+Q-Q plot:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+qqnorm(resi); qqline(resi)# signs of skew/kurt
+```
+
+We can see thick tails at the ends of the Q-Q plot, indiciating a not-so-good fit of the data to the model.
+
+ACF Plot: standard residuals
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# Is serial correlation in the standardized residuals present? - yes
+ggAcf(resi)
+```
+
+The model looks fairly stationary.
+
+Lad dependence: Box-Ljung test
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myboxljungtest(resi,lags=12) # lag independence, no autocorrelation
+```
+
+The test confirms the model residuals does shows non-constant variance.
+
+ACF Plot: squares of the residuals
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# Is serial correlation in the squares of the standardized residuals present? - yes
+ggAcf(resi^2) # los of serial correlation yo
+```
+
+The ACF plot of the squares of the residuals show quite a bit of serial correlation with most of its lags are out the of the CI threshold.
+
+Box-Ljung test: squares of the residuals
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myboxljungarchtest(resi,lags=12) # lag independence, no autocorrelation
+```
+
+The Box-Ljung test's p-value is lower than 0.05, and shows there are ARCH effects and suggests serial autocorrelation.
+
+T-test for 0
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myttest(resi) # mean 0
+```
+
+The 95% CI contains 0, therefore the mean is statistically 0.
+
+Normalcy: skewness
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myskewtest(resi) # left
+```
+
+The model residual distribution contains left skewness, thus is not normal.
+
+Normalcy: Kurtosis
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mykurttest(resi) # tall
+```
+
+The residuals distribution contain thick-tailed Kurtosis, indicating a non-normal distribution.
+
+Stationarity: ADF Test
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myadftest(resi) # is stationary
+```
+
+The ADF test supports the model is stationary
+
+Stationarity: KPSS Test
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mykpsstest(resi) # is stationary
+```
+
+The KPSS test supports the model is stationary.
+
+
+
+### 2.3. Fit a GARCH model with skew-Student-t innovations ($cond.dist="sstd"$) to the log return series. Perform model checking and write the model to be fitted. Based on the fitted model, is the monthly log returns of $ba$ stock skewed? Why?
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+m <- garchFit(~garch(1,1),data=ba,trace=F,cond.dist="sstd")
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# 2.3 Fit a GARCH model with skew-Student-t innovations (cond.dist=\sstd") to the log return series.
+m23 <- m
+resi <- m@residuals
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# 2.3 Write the model to be fitted.
+summary(m)
+```
+
+Based on the summary above, we have the following model:
+
+$$
+\sigma^2_{t|t-1} = \omega + \beta_1 \sigma^2_{t-1|t-2} + \alpha_1 a^2_{t-1} + \mu
+$$
+
+Adding the alpha and beta coeffficients gives us the following:
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+sum(coef(m)[(length(coef(m))-3):(length(coef(m))-2)])
+```
+
+The combined value of 0.9908 is very close to 1 meaning the model's volatility is very slow to revert back to the mean, but overall the volatility is still persistent.
+
+We will conduct model diagnostics.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+autoplot(resi)
+```
+
+From the plot we can see mean 0 and non-constant variance.
+
+Histogram:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+hist(resi) # left skewed, tall
+```
+
+We can observe left skewness and very tall kurtosis, showing the distribution of the model residuals is not normal.
+
+Q-Q Plot:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+qqnorm(resi); qqline(resi)# signs of kurt - thick tails
+```
+
+The thick tails at the end show tall kurtosis, as well as signs of not-so-well goodness-of-fit.
+
+Serial correlation: ACF plot
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# Is serial correlation in the standardized residuals present? - yes
+ggAcf(resi) # fairly stationary?
+```
+
+The ACF plot is not very stationary.
+
+Correlation, lag independende: Box-Ljung test
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myboxljungtest(resi,lags=12) # lag independence, no autocorrelation
+```
+
+The test's low p-value < 0.05 indicates lag dependency and serial correlation.
+
+Serial correlation: ACF plot - squares of standardized residuals
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# Is serial correlation in the squares of the standardized residuals present? - yes
+ggAcf(resi^2) # all kinds of serial correlation on all lags
+```
+
+The plot suggests much serial correlation between lags.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myboxljungarchtest(resi,lags=12) # lag independence, no autocorrelation - ARCH present
+```
+
+The box-Ljung test for square of serialized residuals 
+
+T-test for mean 0:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myttest(resi) # mean 0
+```
+
+The 95% CI contains zero, therefore the mean of the model residuals is statistically 0.
+
+Skewness:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# 2.3 Based on the fitted model, is the monthly log returns of ba stock skewed?
+myskewtest(resi) # left
+```
+
+As we've seen in the distribution plot, the log(ba) stock returns is skewed to the left.
+
+Kurtosis:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mykurttest(resi) # tall
+```
+
+The Kurtosis test confirms the tall distribution we've seen in the distribution plot.
+
+Stationarity: ADF
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myadftest(resi) # is stationary
+```
+
+The KPSS test confirms the model is stationary.
+Stationarity: KPSS
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mykpsstest(resi) # is stationary
+```
+
+The KPSS test confirms the model is stationary.
+
+### 2.4. Fit a GARCH-M model to the monthly log returns. Write the model to be fitted. Is the risk premium statistically significant? Persistent? Why?
+
+We create the following GARCH-M model:
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+m <- garchM(ba)
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+m24 <- m
+resi <- m$residuals
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# 2.4 Write the model to be fitted.
+summary(m)
+```
+
+Based on the summary above, we have the following model:
+
+$$
+ x_i = \mu + \gamma\sigma^2_i + a_i, \; \sigma^2_t = \omega + \alpha_1 a^2_{t-1} + \beta_1\sigma^2_{t-1}, \; a_t = \sigma_i \epsilon_t
+$$
+In this particular case, the $\gamma$ symbol represents the risk premium parameter, and based on the summary above, is not statistically significant compared to the other components of the GARCH-M equation. Hypothetically speaking, though, if the risk premium parameter was statistically significant, it would have been negatively related to its volatility, due to its negative value.
+
+The sum of the alpha and beta coefficients is 0.9794 which means the model's volatility is slow to revert back to the mean but overall the volatility is persistent.
+
+We will conduct model diagnostics.
+
+Plot:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+autoplot(resi)
+```
+
+We notice mean 0 and non-constant variance.
+
+Q-Q Plot:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+qqnorm(resi); qqline(resi)# signs of kurt - thick tails
+```
+
+Thick end tails from Kurtosis show a not-so-well goodness-of-fit.
+
+Stationarity: ACF Plot
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# Is serial correlation in the standardized residuals present? - yes
+ggAcf(resi) # kinda satationary...?
+```
+
+The ACF plots makes the model look somewhat stationary.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myboxljungtest(resi,lags=12) # lag independence, no autocorrelation
+```
+
+The model residuals contain serial autocorrelation.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# Is serial correlation in the squares of the standardized residuals present? - yes
+ggAcf(resi^2) # all kinds of serial correlation on all lags
+```
+
+The ACF plot of the squared residuals show serial correlation among many lags well above the CI threshold.
+
+Lag Independence: Box-Ljung arch test for squared residuals
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myboxljungarchtest(resi,lags=12) # lag independence, no autocorrelation, p-value < 0.05
+```
+
+The test indicates an ARCH effect is present.
+
+T-test for mean 0:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myttest(resi) # mean 0
+```
+
+The 95% CI includes 0, therefore the mean of the model residuals is statistically 0.
+
+Skewness:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myskewtest(resi) # left
+```
+
+The model residuals has left skewness, indicating that the distribution is not normal.
+
+Kurtosis:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mykurttest(resi) # tall
+```
+
+The model residuals distribution has tall Kurtosis, indicating a not normal distribution.
+
+Stationarity: ADF test
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myadftest(resi) # is stationary
+```
+
+The ADF test confirm the model is stationary.
+
+Stationarity: KPSS test
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mykpsstest(resi) # is stationary
+```
+
+
+### 2.5. Fit a TGARCH(1,1) model to the monthly log returns. Write the model to be fitted. Is the leverage effect statistically significant? Persistent? Why?
+
+We have the following TGarch(1,1) model:
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+m <- Tgarch11(ba)
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+m25 <- m
+resi <- m$residuals
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+summary(m)
+```
+
+Based on the summary above, we have the following model:
+
+$$
+ a_t = \epsilon_t\sigma_{t|t-1}, \; \sigma^2_{t|t-1} = \omega + \alpha_1 (|a_{t-1}|+\gamma a_{t-1})^2 + \beta_1\sigma^2_{t-1}, \; for \; -1 < \gamma < 1
+$$
+
+The sum of the alpha and beta coefficients is 0.9390563 which means the model's volatility is slow to revert back to the mean but overall the volatility is persistent.
+
+In regards to the leverage effect, the $\gamma$ parameter is statistically significant. With a positive value, it should have a positive leverage effect to the model.
+
+We will conduct model diagnostics.
+
+Plot:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+autoplot(resi)
+```
+
+From the plot we can see mean 0 and non-constant variance.
+
+Q-Q Plot:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+qqnorm(resi); qqline(resi)# signs of kurt - thick tails
+```
+
+Due to the thick end tails from Kurtosis, we see a not-so-great goodness-of-fit.
+
+ACF plot:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggAcf(resi)
+```
+
+The ACF plot looks relatively stationary.
+
+Correlation, lad indepencence: Box-Ljung test
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myboxljungtest(resi,lags=12) # lag independence, no autocorrelation
+```
+
+The test's low p-value < 0.05 show there is serial correlation in the standard residuals.
+
+ACF plot: square of stardard residuals
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggAcf(resi^2)
+```
+
+We notice much serial correlation between lags in the plot.
+
+ARCH effect: Box-Ljung test for squared standard residuals
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myboxljungarchtest(resi,lags=12) # lag independence, no autocorrelation
+```
+
+We can see ARCH effects present in the squared standard residuals.
+
+T-test for mean 0
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myttest(resi) # mean not 0
+```
+
+The 95% CI contains 0, therefore can consider the mean of the standard residuals to be statistically 0.
+
+Skewness
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myskewtest(resi) # left
+```
+
+The model residual distribution has left skewness, therefore not normal.
+
+Kurtosis:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mykurttest(resi) # tall
+```
+
+The model residual distribution has very tall Kurtosis, therefore not normal.
+
+Stationarity: ADF test
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myadftest(resi) # is stationary
+```
+
+The ADF test shows the model residuals are stationary
+
+Stationarity: KPSS test
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mykpsstest(resi) # is stationary
+```
+
+The KPSS test shows the model residuals are stationary.
+
+
+## 3. Report (20 points)
+
+### Write a Boeing returns analysis executive summary.
+
+(Based on the analysis in section 2, we will use the TGARCH model from part 2.5 based on its combined alpha and beta coeffient score of 0.9391, the lowest value avaiable out of all the 4 models. It's admittedly not that great as its volitility would be considered quite slow to revert back to the mean, but that is the best we have available right now.)
+
+
+We are currently working on developing a model that can predict Boeing's short-term daily stock returns from the average return, using our adjusted Boeing stock data from the past 85 trading days up to the end of last month (September 2022). Our development is based on the prototyping of several financial models, and selected the best-performing model using ARCH and GARCH-based modelling tools we currently have available.
+
+The model we chose is based on how well it could dampen everyday volatility from the average mean of returns. With the volatility dampened, we are able to observe a possible general trend and maybe identify critical parameters such as the risk premium, which can determine overall positive or negative returns based on the volatility. With these risk premiums we then can assess the overall leverage effect the volatility can have on the model.
+
+It is still a work-in-progress in regards to developing a functioning forecasting model to present at this time. While we are able to develop short-term predictions using simpler GARCH-based time series models, we feel that they do not fully represent a proper prediction compared to the more complex models we would prefer to use instead. It is a learning process, and as our knowledge base expands we will continue to develop this model to hopefully provide short term predictions on daily average returns. 

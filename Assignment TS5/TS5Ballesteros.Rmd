@@ -1,0 +1,1502 @@
+---
+output:
+  pdf_document: default
+  html_document: default
+---
+
+
+\begin{titlepage}
+   \begin{center}
+       \vspace*{1cm}
+
+       \LARGE
+       \textbf{Time Series 413, Assignment 5}
+
+       \vspace{0.5cm}
+
+       \Large
+       \textbf{Nonstationary Time Series and Modeling Covariates (TS5)}
+
+       \vspace{1.5cm}
+
+       \vfill
+
+       \Large
+       \textbf{Reed Ballesteros}
+
+       \vspace{0.8cm}
+       
+       \normalsize
+       Northwestern University SPS, Fall 2022\\
+       MSDS-413-DL\\
+       Instructor: Dr. Jamie D. Riggs, Ph.D\\
+       2022-10-24
+
+   \end{center}
+\end{titlepage}
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ggplot2)
+library(TSA)
+library(forecast)
+library(fpp3)
+source('BusCycle.R')
+source('parameterTest.R')
+source('My_Tests.R')
+```
+
+
+The following list defines the data sets and their respective variables. The monthly market liquidity measures are from Professors Pastor and Stambaugh. The data are available from Wharton WRDS and are in the file __m-PastorStambaugh.txt__. See 
+
+https://breakingdownfinance.com/finance-topics/equity-valuation/pastor-stambaugh-model/
+
+The following list defines the variables:
+
+* DATE: is the month the data were collected
+* PS_LEVEL: levels of aggregate liquidity
+* PS_INNOV: innovations in aggregate liquidity
+* PS_VWF: traded liquidity factor
+
+The monthly Fama-Bliss bond yields have maturities of 1 and 3 years. The data are available from CRSP and are in the file __m-FamaBlissdbndyields.txt__.The following list defines the variables:
+
+* qdate: month of the yields
+* yield1: 1-year yields
+* yield3: 3-year yields
+
+```{r include=FALSE, warning=FALSE, message=FALSE}
+# load data
+X <- read.table("m-PastorStambaugh.txt",header=T)
+
+# format DATE column
+dc <- as.character(X$DATE)
+dc <- paste0(substr(dc,1,6),"01")
+dc <- paste0(substr(dc,1,4),"-",substr(dc,5,6),"-",substr(dc,7,8))
+dt <- as.Date(dc)
+X$DATE <- dt
+rm(dc,dt)
+
+psLevel <- ts(X$PS_LEVEL)
+psInnov <- ts(X$PS_INNOV)
+psVwf <- ts(X$PS_VWF)
+```
+
+
+## 1. Outlier Management (20 points)
+
+Consider the monthly market liquidity measure of Professors Pastor and Stambaugh. The data are available from Wharton WRDS and are in the file __m-PastorStambaugh.txt__. Consider the variable $PS$ level and denote the series by $x_t$.
+
+### 1.1. Perform EDA.
+
+Validate data as a time series:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+length(unique(X$DATE))
+length(X$DATE)
+```
+We have 140 unique years in 140 observations, which meets the  $H_{10}: x_{it}, \; i \in \{1,2\}, \; t \in \{1,2,...,n\}$ requirement for time series validation.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+df <- round(diff(X$DATE)/(365.25/12))
+nrow(X)
+table(df)
+```
+From the test above, we can verify that the constant time span between each date is only one month, denoted by the single value 1. This meets the $H_{20}: (t+1) - t = c, t \in \{1,2...,n\}$ requirement for time series validation. 
+
+Let us create a general plot of the data:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggplot() + geom_point(data = X, aes(x = DATE, y = PS_LEVEL)) + 
+  stat_smooth(aes(x = X$DATE, y = X$PS_LEVEL), colour="red") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+We seem to observe a general flat trend in the data, but might have to specifically test via t-test for mean zero to confirm linear trend does not exist.
+
+Plot: PS_LEVEL
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+plot(psLevel) # looks like non-constant variance, mean not zero, looks flat...?
+```
+
+Plotting as a PS_LEVEL time series data visually identifies some possible outliers, such as the PS_LEVEL drop to almost -0.45 at around time 300, and the mean is not zero and that some kind of trend exists.
+
+At this point instead of continuing with the EDA since we do not yet have mean zero we should transform the data, performing diff(PS_LEVEL).
+
+```{r include=FALSE, warning=FALSE, message=FALSE}
+dPsLevel <- diff(psLevel)
+```
+
+Plot: diff(PS_LEVEL)
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+plot(dPsLevel) # looks like non-constant variance, mean not zero, looks flat...?
+```
+
+We now see that a linear trend is removed with mean 0 of diff(PS_LEVEL). We still notice the outliers at around the 300 mark.
+
+Histogram: diff(PS_LEVEL)
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+hist(dPsLevel) # left skewed, tall
+```
+
+We can observe a left-skewed, tall distribution, thus showing non-normalcy in respect to a Gaussian PDF.
+
+Q-Q Plot: diff(PS_LEVEL)
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+qqnorm(dPsLevel) # signs of skew/kurt
+qqline(dPsLevel)
+```
+
+We can notice skewness and (excess) Kurtotis from the Q-Q plot as the ends of the plot veer off the idea normal line, thus showing non-normalcy in respect to a Gaussian PDF.
+
+Stationarity: ACF diff(PS_LEVEL)
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggAcf(dPsLevel) # q = 6? q = 0 suggested below tho
+```
+
+Based on the ACF plot above, we'll use an MA(1) for our ARIMA model.
+
+Stationarity: PACF diff(PS_LEVEL)
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggPacf(dPsLevel) # p = 5? Assignment suggests p = 5 tho
+```
+
+Based on the PACF plot above, we'll use an AR(5) for our ARIMA model.
+
+Mean 0: T-Test diff(PS_LEVEL)
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myttest(dPsLevel) # mean NOT zero, linear trend present, take diff?
+```
+
+The 95% Confidence Interval (CI) of the diff(PS_LEVEL) data does contain 0, thus showing normalcy in respect to a Gaussian PDF, as well as the linear trend removed.
+
+
+Normalcy: Skewness diff(PS_LEVEL)
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myskewtest(dPsLevel) # left
+```
+
+The diff(PS_LEVEL) data has a distribution with right skewness, thus showing non-normalcy in respect to a Gaussian PDF.
+
+Normalcy: (excess) Kurtosis diff(PS_LEVEL)
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mykurttest(psLevel) # tall
+```
+
+The diff(PS_LEVEL) data has a distribution with tall (excess) Kurtosis, thus showing non-normalcy in respect to a Gaussian PDF.
+
+Constant Variance: Breusch-Pagan Test diff(PS_LEVEL)
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mybptest(psLevel) # non-constant variance, heteroscedastic 
+```
+
+While we can see signs of non-constant variance in the time series plot, the Breusch-Pagen test confirms it.
+
+Lag independence: Box-Ljung test diff(PS_LEVEL)
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myboxljungtest(psLevel) # lag dependency, autocorrelation
+```
+
+The Box-Ljung test shows the diff(PS_LEVEL) data contains lag dependency and thus autocorrelation.
+
+### 1.2. Build a time series model for $x_t$ (the expected value equation) using the model-building process. Write the equation of the model to be fitted (not the fitted model).
+
+Based on the EDA above we will create an ARIMA(5,1,1) model, with d=1 since we've differenced the PS_LEVEL data.
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+p<-5;d<-1;q<-1
+m <- Arima(psLevel,order=c(p,d,q))
+```
+
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+summary(m) # AICc=-1671.64
+```
+
+Based on the summary above we create the following generalized equation:
+
+$$
+x_{t} = \phi_1 x_{t-1} + \phi_2 x_{t-2} + \phi_3 x_{t-3}  + \phi_4 x_{t-4} + \phi_5 x_{t-5} + \theta_1 z_{t-1}
+$$
+
+We will conduct model diagnostics.
+
+```{r include=FALSE, warning=FALSE, message=FALSE}
+m11 <- m # same model to m11
+rs <- resid(m)
+```
+
+Check residuals:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+checkresiduals(rs)
+```
+
+We see the residuals plot with maybe constant variance (we'll further test with McLeod-Li below) and mean 0, the ACF plot looks stationary, and the distribution is tall and left-skewed, therefore not normal in respect to a Gaussian PDF.
+
+Stationarity: ACF Plot
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggAcf(rs) # looks stationary
+```
+
+The model looks stationary, will test with KPSS/ADF below.
+
+Stationarity: PACF Plot
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggPacf(rs) # looks stationary
+```
+
+The model looks stationary, will test with KPSS/ADF below.
+
+Mean Zero: T-Test
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myttest(rs) # mean 0
+```
+
+The 95% CI contains zero, therefore the mean is statistically 0 and the linear trend is removed.
+
+Normalcy: Skewness
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myskewtest(rs) # left
+```
+
+The model has exhibits left skewness, showing non-normalcy in respect to a Gaussian PDF.
+
+Normalcy: (excess) Kurtosis
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mykurttest(rs) # tall
+```
+
+The model has exhibits tall (excess) Kurtosis, showing non-normalcy in respect to a Gaussian PDF.
+
+Constant Variance: McLeod-Li Test
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mymcleodlitest(m) # constant variance, homoscedastic - output lags
+```
+
+The model exhibits constant variance.
+
+Lag independence: Box-Ljung test
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myboxljungtest(rs) # lag independence, no autocorrelation
+```
+
+Box-Ljung test shows model has lag independence and thus no autocorrelation.
+
+Stationarity: ADF test
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myadftest(rs) # stationary
+```
+
+The ADF test shows the model is stationary.
+
+Stationarity: KPSS test
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mykpsstest(rs) # stationary
+```
+
+The KPSS test shows the model is stationary.
+
+Checking for ARIMA(5,1,1) business cycles:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+#test for business cycles
+pp <- c(1,-m11$coef)
+ss <- polyroot(pp)
+unique(round(sapply(all_complex(ss),period),digits=3)) # only one cycle (4 years?)
+```
+
+We see there are three business cycles, 14-month, 2-month, and 4-month business cycles.
+
+### 1.3. Identify the largest outlier in the series. Refine the fitted model by using an indicator for the outlier. Write the equation of the refined model (not the fitted model).
+
+From the residuals plot in section 1.2, the largest outlier in the series lies below the mean, so we will look for the lowest value in the residuals.
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+which.min(m$residuals)
+```
+
+We find the largest outlier is at index 303.
+
+```{r include=FALSE, warning=FALSE, message=FALSE}
+i303 <- rep(0,605)
+i303[303] <- 1
+```
+
+Let's create a model using the outlier:
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+m <- Arima(psLevel,order=c(p,d,q), xreg=i303)
+```
+
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+summary(m) # AICc=-1726.75
+```
+
+Based on the summary above we create the following generalized equation:
+
+$$
+y_{t} = \phi_1 y_{t-1} + \phi_2 y_{t-2} + \phi_3 y_{t-3}  + \phi_4 y_{t-4} + \phi_5 y_{t-5} + \theta_1 z_{t-1} + \beta x_t + \epsilon_t , \; \epsilon_t \sim WN(0,\sigma^{2}_{\epsilon})
+$$
+
+We will conduct model diagnostics.
+
+```{r include=FALSE, warning=FALSE, message=FALSE}
+m12 <- m # save model to m12
+rs <- resid(m)
+```
+
+Check residuals:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+checkresiduals(rs)
+```
+
+The plot most likely shows mean 0 with no linear trend and maybe eyeball non-constant variance (we'll test with McLeod-Li below). The ACF shows the model lags are stationary. The distribution shows left skewness and tall Kutosis, showing non-normalcy in respect to a Gaussian PDF.
+
+Stationarity: ACF Plot
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggAcf(rs) # looks stationary
+```
+
+The model looks stationary with the ACF plot, will test with KPSS/ADF below.
+
+Stationarity: PACF Plot
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggPacf(rs) # looks stationary
+```
+
+The model looks stationary with the PACF plot, will test with KPSS/ADF below.
+
+Mean Zero: T-Test
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myttest(rs) # mean 0
+```
+
+The 95% CI contains zero, therefore the mean is statistically 0 and the linear trend is removed.
+
+Normalcy: Skewness
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myskewtest(rs) # left
+```
+
+The model has exhibits left skewness, showing non-normalcy in respect to a Gaussian PDF.
+
+Normalcy: (excess) Kurtosis
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mykurttest(rs) # tall
+```
+
+The model has exhibits tall (excess) Kurtosis, showing non-normalcy in respect to a Gaussian PDF.
+
+Constant Variance: McLeod-Li Test
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mymcleodlitest(m)
+```
+
+The model exhibits non-constant variance with many lags with a p-value of under 0.05.
+
+Lag independence: Box-Ljung test
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myboxljungtest(rs) # lag independence, no autocorrelation
+```
+
+Box-Ljung test shows model has lag independence and thus no autocorrelation.
+
+Stationarity: ADF test
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myadftest(rs) # stationary
+```
+
+The ADF test shows the model is stationary.
+
+Stationarity: KPSS
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mykpsstest(rs) # stationary
+```
+
+The KPSS test shows the model is stationary.
+
+Checking for ARIMA(5,1,1) with outlier business cycles:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+#test for business cycles
+pp <- c(1,-m$coef)
+ss <- polyroot(pp)
+unique(round(sapply(all_complex(ss),period),digits=3))
+```
+
+The model finds 3 business cycles, a 14-month, 2-month, and 4-month, same as the 'regular' ARIMA(5,1,1) model in section 1.2.
+
+### 1.4. Further refine the model by setting the least significant parameters to zero. Write the equation of the revised model to be fitted (not the fitted model).
+
+Let us find the least significant parameters from our model in section 1.3:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+parameterTest(m) # stationary
+```
+
+We find that only ar1 and ar4 are the insignificant components in the model.
+
+Let's create a reduced model:
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+#        A1,A2,A3,A4,A5,M1,XR
+c11 <- c(00,NA,NA,00,NA,NA,NA)
+m <- Arima(psLevel,order=c(p,d,q),xreg=i303,fixed=c11)   # AICc=-1729.18
+```
+
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+summary(m) # AICc=-1729.18
+```
+
+Based on the summary above we create the following reduced generalized equation:
+
+$$
+y_{t} = \phi_2 y_{t-2} + \phi_3 y_{t-3} + \phi_5 y_{t-5} + \theta_1 z_{t-1} + \beta x_t + \epsilon_t , \; \epsilon_t \sim WN(0,\sigma^{2}_{\epsilon})
+$$
+
+We will conduct model diagnostics.
+
+```{r include=FALSE, warning=FALSE, message=FALSE}
+m13 <- m # save model to m13
+rs <- resid(m)
+```
+
+Check residuals:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+checkresiduals(rs)
+```
+
+The plot most likely shows mean 0 with no linear trend and  maybe eyeball non-constant variance (we will test with McLeod-Li below). The ACF shows the model lags are stationary. The distribution shows left skewness and tall Kutosis, showing non-normalcy in respect to a Gaussian PDF.
+
+Stationarity: ACF Plot
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggAcf(rs) # looks stationary
+```
+
+The model looks stationary, will test with KPSS/ADF below.
+
+Stationarity: PACF Plot
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggPacf(rs) # looks stationary
+```
+
+The model looks stationary, will test with KPSS/ADF below.
+
+Mean Zero: T-Test
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myttest(rs) # mean 0
+```
+
+The 95% CI contains zero, therefore the mean is statistically 0 and the linear trend is removed.
+
+Normalcy: Skewness
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myskewtest(rs) # left
+```
+
+The model has exhibits left skewness, showing non-normalcy in respect to a Gaussian PDF.
+
+Normalcy: (excess) Kurtosis
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mykurttest(rs) # tall
+```
+
+The model has exhibits tall (excess) Kurtosis, showing non-normalcy in respect to a Gaussian PDF.
+
+Constant Variance: McLeod-Li Test
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mymcleodlitest(m) # constant variance, homoscedastic - output lags
+```
+
+The model exhibits non-constant variance with many lags with a p-value of under 0.05.
+
+Lag independence: Box-Ljung test
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myboxljungtest(rs) # lag independence, no autocorrelation
+```
+
+Box-Ljung test shows model has lag independence and thus no autocorrelation.
+
+Stationarity: ADF test
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myadftest(rs) # stationary
+```
+
+The ADF test shows the model is stationary.
+
+Stationarity: KPSS
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mykpsstest(rs) # stationary
+```
+
+The KPSS test shows the model is stationary.
+
+Checking for reduced ARIMA(5,1,1) model with outlier business cycles:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+#test for business cycles
+pp <- c(1,-m13$coef)
+ss <- polyroot(pp)
+unique(round(sapply(all_complex(ss),period),digits=3)) # only one cycle (4 years?)
+```
+
+Similar to the full model, this model contains 3 business cycles, 14-month, 2-month, and 4-month cycles.
+
+1.5. Compare your model from part 1.3. with your model from 1.4.. Which is preferred and why?
+
+Full ARIMA(5,1,1) model with outlier summary:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+summary(m12) # RMSE/MAE
+```
+
+Reduced ARIMA(5,1,1) model with outlier summary:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+summary(m13) # AICc=-1729.18
+```
+
+The reduced model with the outlier has a lower AICc of -1729.18 compared to the full model with AICc -1726.75. While difference seems like a marginal gain, despite it parsimony is favored in this case. And since we are dealing with bond yields, the marginal difference can impact money markets (and especially peoples' money in general), and therefore would favor the model with its lower AICc score, and it happens to be the reduced model.
+
+
+## 2. Box-Jenkins Methodology (20 points)
+
+Consider the monthly Fama-Bliss bond yields with maturities of 1 and 3 years. The data are available from CRSP and are in the file __m-FamaBlissdbndyields.txt__. Denote the yields by $y_{1t}$ and $y_{3t}$, respectively.
+
+```{r include=FALSE, warning=FALSE, message=FALSE}
+# load data
+X <-read.table("m-FamaBlissdbndyields.txt",header=T)
+
+# Convert date
+dc <- as.character(X$qdate)
+dc <- paste0(substr(dc,1,6),"01")
+dc <- paste0(substr(dc,1,4),"-",substr(dc,5,6),"-",substr(dc,7,8))
+dt <- as.Date(dc)
+X$qdate <- dt
+rm(dc,dt)
+
+y1t <- ts(X[,2])
+y3t <- ts(X[,3])
+xt <- ts(log(y3t))
+dxt <- diff(xt)
+```
+
+
+### 2.1. Perform EDA.
+
+Validate data as a time series:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+length(unique(X$qdate))
+length(X$qdate)
+```
+We have 636 unique years in 636 observations, which meets the  $H_{10}: x_{it}, \; i \in \{1,2\}, \; t \in \{1,2,...,n\}$ requirement for time series validation.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+df <- round(diff(X$qdate)/(365.25/12))
+nrow(X)
+table(df)
+```
+From the test above, we can verify that the constant time span between each date is only one month, denoted by the single value 1. This meets the $H_{20}: (t+1) - t = c, t \in \{1,2...,n\}$ requirement for time series validation. 
+
+
+Let us create a time series plot of yield3:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+plot(y3t) # looks like non-constant variance, mean not zero, looks flat...?
+```
+
+Plotting the yield3 time series data visually shows the mean is not zero and not relatively flat with non-constant variance, with the data peaking at about 15 in 3-year bond yields at around month 200 to 300.
+
+At this point instead of continuing with the EDA since we do not yet have mean zero we should transform the data, performing log(yield3).
+
+Plot: log(yield3)
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+plot(xt) # looks like non-constant variance, mean not zero, looks flat...?
+```
+
+Transforming the data to log(yield3) still does not exhibit mean zero and constant variance. We will further transform the data to diff(log(yield3)).
+
+Plot: diff(log(yield3))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+plot(dxt) # looks like non-constant variance, mean not zero, looks flat...?
+```
+
+While transforming the data to diff(log(yield3)) still does not exhibit constant variance, we can eyeball mean 0 and will perform a full EDA moving forward.
+
+Histogram: diff(log(yield3))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+hist(dxt) # not much skew, tall
+```
+
+We can observe a fairly even-skewed but tall distribution, which might not fully qualify for normalcy in respect to a Gaussian PDF.
+
+Q-Q Plot: diff(log(yield3))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+qqnorm(dxt) # signs of skew/kurt
+qqline(dxt)
+```
+
+We can notice slight skewness and a good amount (excess) Kurtotis from the Q-Q plot as the ends of the plot veer off the idea normal line, thus showing non-normalcy in respect to a Gaussian PDF.
+
+Stationarity: ACF diff(log(yield3))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggAcf(dxt) # q = 6?
+```
+
+Based on the ACF plot above, we'll use MA(6) for our ARIMA model.
+
+Stationarity: PACF diff(PS_LEVEL)
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggPacf(dxt) # p = 6?
+```
+
+Based on the PACF plot above, we'll use AR(6) for our ARIMA model.
+
+Mean 0: T-Test diff(log(yield3))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myttest(dxt) # mean zero
+```
+
+The 95% Confidence Interval (CI) of diff(log(yield3)) does contain 0, thus the mean is statistically zero, showing normalcy in respect to a Gaussian PDF, as well as the linear trend removed.
+
+
+Normalcy: Skewness diff(log(yield3))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myskewtest(dxt) # slight right
+```
+
+The PS_LEVEL data has a distribution with slight right skewness, thus showing non-normalcy in respect to a Gaussian PDF.
+
+Normalcy: (excess) Kurtosis diff(log(yield3))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mykurttest(dxt) # tall
+```
+
+The PS_LEVEL data has a distribution with tall (excess) Kurtosis, thus showing non-normalcy in respect to a Gaussian PDF.
+
+Constant Variance: Breush-Pagan Test diff(log(yield3))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mybptest(dxt) # non-constant variance, heteroscedastic 
+```
+
+While we can see signs of non-constant variance in the time series plot, the Breusch-Pagen test confirms it.
+
+Lag independence: Box-Ljung test diff(log(yield3))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myboxljungtest(dxt) # lag dependency, autocorrelation
+```
+
+The Box-Ljung test shows the diff(log(yield3)) transformation contains lag dependency and thus autocorrelation.
+
+
+
+### 2.2. Build a time series model using the Box-Jenkins method for the log of the year three ($y_{3t}$) data: $x_t = log(y_{3t})$. For simplicity, you may ignore possible outliers, but describe how you would treat outliers if they were not to be ignored.
+
+Based on our EDA from section 2.1 above, we will set our ARIMA model with AR(6) and MA(6) components, and since we performed the EDA on differenced log(yield3) data, we will also set d = 1 to denote the differencing.
+
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+# set d=1 for diff(log(yield3))
+p<-6;d<-1;q<-6 # based on EDA in 2.1
+m <- Arima(xt,order=c(p,d,q),method="ML")
+```
+
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+m22 <- m
+rs <- resid(m)
+summary(m) # AICc=-1211.95
+```
+
+We will conduct model diagnostics for ARIMA(6,1,6).
+
+Check residuals:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+checkresiduals(rs)
+```
+
+From the residuals plot we can eyeball a mean zero and non-constant variance. The ACF plot might look to be stationary (will test with KPSS/ADF), while the distribution looks tall but with about even skewness at mean 0.
+
+Stationarity: ACF Plot
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggAcf(rs) # looks stationary
+```
+
+The model might look to be stationary, will test with KPSS/ADF below.
+
+Stationarity: PACF Plot
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggPacf(rs) # looks stationary
+```
+
+The model might look to be stationary, will test with KPSS/ADF below.
+
+Mean Zero: T-Test
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myttest(rs) # mean 0
+```
+
+The 95% Confidence Interval (CI) contains zero, therefore the mean is statistically 0 and the linear trend is removed.
+
+Normalcy: Skewness
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myskewtest(rs) # slight right
+```
+
+The model has exhibits slight right skewness, showing non-normalcy in respect to a Gaussian PDF.
+
+Normalcy: (excess) Kurtosis
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mykurttest(rs) # tall
+```
+
+The model has exhibits tall (excess) Kurtosis, showing non-normalcy in respect to a Gaussian PDF.
+
+Constant Variance: McLeod-Li Test
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mymcleodlitest(m)  # *NON*-constant variance, heteroscedastic - output lags
+```
+
+The model exhibits non-constant variance.
+
+Lag independence:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myboxljungtest(rs) # ag dependence, autocorrelation
+```
+
+Box-Ljung test shows the model displays lag dependence and thus has autocorrelation.
+
+Stationarity: ADF test
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myadftest(rs) # stationary
+```
+
+The ADF test shows the model is stationary.
+
+Stationarity: KPSS
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mykpsstest(rs) # stationary
+```
+
+The KPSS test shows the model is stationary.
+
+Checking for business cycles:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+#test for business cycles
+pp <- c(1,-m$coef)
+ss <- polyroot(pp)
+unique(round(sapply(all_complex(ss),period),digits=3)) # only one cycle (4 years?)
+```
+
+The model contains 5 business cycles, 11-month, 2-month, 4-month, 3-month, and 6-month cycles.
+
+
+
+### 2.3. Fit the following model to the log earnings series: $m <- arima(xt, order=c(0,1,1), seasonal=list(order=c(0,0,1), period=4))$ where $xt$ denotes the log of the earnings. Write the equation of the fitted model. Compare this model with the model in part 2.2. Which model is preferred? Why?
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+m <- Arima(xt, order=c(0,1,1), seasonal=list(order=c(0,0,1), period=4))
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+m23 <- m
+rs <- resid(m)
+summary(m) # AICc=-1189.48
+```
+
+Based on the summary above, we have the following equation:
+
+$$
+x_{t} = \theta_1 z_{t-1} + \Theta_1 z_{t-1}
+$$
+
+We will conduct model diagnostics for ARIMA(0,1,1) x SARIMA(0,0,1).
+
+Check residuals:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+checkresiduals(rs)
+```
+
+From the residuals plot we can eyeball a mean zero and non-constant variance. The ACF plot might not be stationary (will test with KPSS/ADF), while the distribution looks tall but with about even skewness at mean 0.
+
+Stationarity: ACF Plot
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggAcf(rs) # looks stationary
+```
+
+The model doesn't look very stationary, will test with KPSS/ADF below.
+
+Stationarity: PACF Plot
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggPacf(rs) # looks stationary
+```
+
+The model doesn't look very stationary, will test with KPSS/ADF below.
+
+Mean Zero: T-Test
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myttest(rs) # mean 0
+```
+
+The 95% Confidence Interval (CI) contains zero, therefore the mean is statistically 0 and the linear trend is removed.
+
+Normalcy: Skewness
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myskewtest(rs) # slight right
+```
+
+The model has exhibits slight right skewness, showing non-normalcy in respect to a Gaussian PDF.
+
+Normalcy: (excess) Kurtosis
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mykurttest(rs) # tall
+```
+
+The model has exhibits tall (excess) Kurtosis, showing non-normalcy in respect to a Gaussian PDF.
+
+Constant Variance: McLeod-Li Test
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mymcleodlitest(m)  # *NON*-constant variance, heteroscedastic - output lags
+```
+
+The model exhibits non-constant variance as all of the model lags are under the p-value of 0.05.
+
+Lag independence:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myboxljungtest(rs) # ag dependence, autocorrelation
+```
+
+Box-Ljung test shows the model displays lag dependence and thus has autocorrelation.
+
+Stationarity: ADF test
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myadftest(rs) # stationary
+```
+
+The ADF test shows the model is stationary.
+
+Stationarity: KPSS
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mykpsstest(rs) # stationary
+```
+
+The KPSS test shows the model is stationary.
+
+Checking for business cycles:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+#test for business cycles
+pp <- c(1,-m$coef)
+ss <- polyroot(pp)
+unique(round(sapply(all_complex(ss),period),digits=3)) # only one cycle (4 years?)
+```
+
+The model shows only a 4-month business cycle.
+
+Comparing the ARIMA(6,1,6) vs. the ARIMA(0,1,1)xSARIMA(0,0,1) model:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+summary(m22) # AIC=-1211.95<- better? also lower RMSE/MAE
+summary(m23) # AICc=-1189.48
+```
+
+From the summary statistics above, the ARIMA(6,1,6) model has lower AICc (-1211.95), RMSE(0.09106), and MAE (0.05884) compared to the ARIMA(0,1,1) x SARIMA(0,0,1) model's AICc (-1189.48), RMSE(0.09432), and MAE (0.06016). Because of the lower statistics, we would choose the ARIMA(6,1,6) model over the ARIMA(0,1,1) x SARIMA(0,0,1) model.
+
+
+### 2.4. You may use $t = 600$ as the starting forecast origin. Which model is preferred? Why?
+
+Forecast: ARIMA(6,1,6)
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+fm22 <- Arima(y3t,order=c(6,1,6),include.mean=F)
+f22 <- forecast::forecast(fm22,h=50)
+autoplot(f22) # slightly better forecast...?
+# at least this one is not as straight, also smaller range
+```
+
+Forecast: ARIMA(0,1,1) x SARIMA(0,0,1)
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+fm23 <- Arima(y3t,order=c(0,1,1), seasonal=list(order=c(0,0,1), period=4),include.mean=F)
+f23 <- forecast::forecast(fm23,h=50)
+autoplot(f23)
+```
+
+Based on the sample forecasts above, while both models are admittedly not great, the ARIMA(6,1,6) performs better with a smaller 80% and 95% CI range compared to the ARIMA(0,1,1) x SARIMA(0,0,1) model.
+
+
+## 3. ARIMA and Regression Errors (20 points)
+
+Consider the monthly Fama-Bliss bond yields with maturities of 1 and 3 years. The data are available from CRSP and are in the file __m-FamaBlissdbndyields.txt__. Denote the yields by y1t and y3t, respectively. The goal is to explore the dependence of the 3-year yield on the 1 year yield.
+
+```{r include=FALSE, warning=FALSE, message=FALSE}
+X <- read.table("m-FamaBlissdbndyields.txt",header=T)
+
+dc <- as.character(X$qdate)
+dc <- paste0(substr(dc,1,6),"01")
+dc <- paste0(substr(dc,1,4),"-",substr(dc,5,6),"-",substr(dc,7,8))
+dt <- as.Date(dc)
+X$qdate <- dt
+rm(dc,dt)
+
+y1t <- ts(X[,2]); y3t <- ts(X[,3])
+```
+
+
+### 3.1. Fit the linear regression model $y3t = \beta_0 + \beta_1y_{1t}+ e_t$ using the model-building process. Write the equation of the model to be fitted.
+
+We create the following linear regression model:
+
+```{r include=TRUE, warning=FALSE, message=FALSE}
+m <- lm(y3t~y1t)
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+m31 <- m
+rs <- resid(m)
+summary(m)
+```
+
+From the summary above, we have the following equation:
+
+$$
+y_{3t} = \beta_0 + \beta_1y_{1t}+ \eta_t
+$$
+
+We will perform model diagnostics on the $y_{3t} = \beta_0 + \beta_1y_{1t}+ \eta_t$ model.
+
+Check residuals plot:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+checkresiduals(rs)
+```
+
+The residuals plot might eyeball mean 0 but we'll have to run a t-test for mean 0 to find out. The ACF plot shows the lags of the model residuals is not stationary. The distribution looks tall and might be slightly skewed to the left, showing non-normalcy in respect to a Gaussian PDF.
+
+PACF plot:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggPacf(resid(m)) # eyeball non-stationary
+```
+
+We see autocorrelation in the 1st lag, suggesting AR(1) for the regression model.
+
+T-Test for Mean 0:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+#myttest(y3t) # mean zero
+#myttest(rs) # mean zero
+myttest(resid(m31)) # mean zero
+```
+
+The 95% CI of the linear regression model residuals contain 0 there the mean of the residuals is statistically 0, and that the linear trend is removed.
+
+ADF Test:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myadftest(rs) # stationary ?!
+```
+
+The ADF test shows that there are no unit roots in regards to drifting.
+
+KPSS Test:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mykpsstest(rs) # not stationary
+```
+
+The KPSS test shows that there are unit roots in regards to random walk and trending.
+
+
+
+### 3.2. Fit a linear regression model letting $d_{1t} = \triangle y_{1t}$ and $d_{2t} = \triangle y_{3t}$, where $\triangle$ is the differencing operator. Here $d_{it}, i = 1, 2, 3$ denotes the change in monthly bond yields. Consider the linear regression $d_{3t} = \beta d_{1t} + e_t$. Write the equation of the model to be fitted. Is the model an adequate model? Why?
+
+
+```{r include=FALSE, warning=FALSE, message=FALSE}
+d1t <- ts(diff(y1t)); d3t=ts(diff(y3t))
+```
+
+We create the following linear regression model:
+
+```{r include=TRUE, warning=FALSE, message=FALSE}
+m <- lm(d3t ~ -1 + d1t)
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+m32 <- m
+rs <- resid(m)
+summary(m)
+```
+
+From the summary above, we have the following equation:
+
+$$
+d_{3t} = \beta_0 + \beta_1d_{1t}+ \eta_t
+$$
+
+We will perform model diagnostics on the $d_{3t} = \beta_0 + \beta_1d_{1t}+ \eta_t$ model.
+
+Check residuals plot:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+checkresiduals(rs)
+```
+
+The residuals plot might eyeball mean 0 but we'll have to run a t-test for mean 0 to find out. The ACF plot shows the lags of the model residuals is not stationary. The distirbution looks tall and might be slighly skewed to the left, showing non-normalcy in respect to a Gaussian PDF.
+
+PACF Plot:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggPacf(rs) # eyeball non-stationary
+```
+
+The PACF plot suggests an AR(5) model for the linear regression model.
+
+T-Test for mean 0:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myttest(d3t) # mean zero
+```
+
+The 95% CI of the linear regression model residuals contain 0 there the mean of the residuals is statistically 0, and that the linear trend is removed.
+
+ADF Test:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myadftest(rs) # stationary ?!
+```
+
+The ADF test shows no unit roots and that it is stationary.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mykpsstest(rs) # not stationary
+```
+
+The KPSS test also shows no unit roots and that it is stationary.
+
+
+
+### 3.3. Based on the model refinements, describe and compare the linear dependence between the bond yields of the two linear regression models.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+summary(m31) # Multiple R-squared:  0.9691
+```
+
+```{r include=FALSE, warning=FALSE, message=FALSE}
+m311 <- Arima(y3t, order=c(0,0,0), xreg=y1t, include.mean=T)
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+summary(m311) # AICc=998.88
+```
+
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+summary(m32) # Multiple R-squared:  0.7963
+```
+
+```{r include=FALSE, warning=FALSE, message=FALSE}
+m322 <- Arima(d3t, order=c(0,0,0), xreg=d1t, include.mean=F)
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+summary(m322) # AICc=-370.74
+```
+
+Based on the model summaries above, the $y_{3t} = \beta_0 + \beta_1y_{1t}+ \eta_t$ regression model has a higher R-squared score of 0.9691 over the $d_{3t} = \beta_0 + \beta_1d_{1t}+ \eta_t$ regression model R-squared score of 0.7963. That being said, as these regression models are integrated into an ARIMA model, the $d_{3t} = \beta_0 + \beta_1d_{1t}+ \eta_t$ model has a much lower AICc of -370.74 compared to the $y_{3t} = \beta_0 + \beta_1y_{1t}+ \eta_t$ model's AICc of 998.88.
+
+Because of the much lower AICc score, the $d_{3t} = \beta_0 + \beta_1d_{1t}+ \eta_t$ regression model would be more preferred to integrate into an ARIMA time series model.
+
+### 3.4. Fit an AR($m33\$order$) model to $d_{3t}$ using $d_{1t}$ as an explanatory variable using the model-building process. Write the equation of the model to be fitted.
+
+```{r include=FALSE, warning=FALSE, message=FALSE}
+m <- ar(ts(rs), method="mle")   # find p for model m33
+m33 <- m
+```
+
+The order of $m33\$order$ to $d_{3t}$ using $d_{1t}$ is:
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+m33$order
+```
+
+We create the following model using $m33\$order$ 5:
+
+```{r includ=TRUE, warning=FALSE, message=FALSE}
+m <- Arima(ts(d3t), order=c(m33$order,0,0), xreg=d1t, include.mean=F)
+```
+
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+m34 <- m
+summary(m) # AICc=-393.23
+```
+
+The model above and the linear regression model of $d_{3t}$ and $d_{1t}$ give us the following equation:
+
+$$
+y_i = \beta_0 + \beta_1d_{1t}
+ + \phi_1 x_{t-1} + \phi_2 x_{t-2} + \phi_3 x_{t-3}  + \phi_4 x_{t-4} + \phi_5 x_{t-5} + e_i
+$$
+
+We will perform model diagnostics.
+
+Check residuals plot:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+checkresiduals(rs)
+```
+
+The residuals plot might eyeball mean 0 but we'll have to run a t-test for mean 0 to confirm. The ACF plot shows the lags of the model residuals to be fairly stationary. The distribution looks tall and might be slightly skewed to the right, showing non-normalcy in respect to a Gaussian PDF.
+
+PACF Plot:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggPacf(rs) # eyeball non-stationary
+```
+
+The PACF plot suggests the model to be fairly stationary.
+
+T-Test for mean 0:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myttest(rs) # mean zero
+```
+
+The 95% CI of the linear regression model residuals contain 0 there the mean of the residuals is statistically 0, and that the linear trend is removed.
+
+ADF Test:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myadftest(rs) # stationary ?!
+```
+
+The ADF test shows no unit roots and that the model is stationary.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mykpsstest(rs) # not stationary
+```
+
+The KPSS test also shows no unit roots and that the model is stationary.
+
+Check for business cycles:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+p2 <- c(1,-m$coef)
+s2 <- polyroot(p2)    # if no imaginary part, no cycles
+(z = unique(round(sapply(all_complex(s2),period),digits=3)))   # lengths of business cycles
+```
+
+We find two business cycles in the model: 6-month and a 3-month cycles.
+
+
+### 3.5. Refine the model in 3.4. by setting the insignificant coefficients to zero. Write the equation of the fitted model. Compare this model with your best linear regression model. Which is better? Why?
+
+We test the model in section 3.4 for significant components:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+parameterTest(m)   # diff.order defaults to 0, no differencing; AR3 stat-insig
+```
+
+We find that the ar3 component of the model $\phi_3 x_{t-3}$ is statistically insignificant and will be removed.
+
+We create the following reduced model:
+
+```{r include=TRUE, warning=FALSE, message=FALSE}
+c35 <- c(NA,NA, 0,NA,NA,NA)
+m <- Arima(d3t, order=c(5,0,0), xreg=d1t, include.mean=F, fixed=c35)
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+m35 <- m
+rs <- resid(m)
+summary(m) # AICc=-394.59
+```
+
+The reduced model above and the linear regression model of $d_{3t}$ and $d_{1t}$ give us the following equation:
+
+$$
+y_i = \beta_0 + \beta_1d_{1t} + \phi_1 x_{t-1} + \phi_2 x_{t-2} + \phi_4 x_{t-4} + \phi_5 x_{t-5} + e_i
+$$
+
+We will perform model diagnostics.
+
+Check residuals plot:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+checkresiduals(rs)
+```
+
+The residuals plot might eyeball mean 0 but we'll have to run a t-test for mean 0 to find out. The ACF plot shows the lags of the model residuals to be fairly stationary. The distribution looks tall and might be slightly skewed to the right, showing non-normalcy in respect to a Gaussian PDF.
+
+PACF Plot:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggPacf(rs) # eyeball non-stationary
+```
+
+The PACF plot suggests the model to be fairly stationary.
+
+T-Test for mean 0:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myttest(rs) # mean zero
+```
+
+The 95% CI of the linear regression model residuals contain 0 there the mean of the residuals is statistically 0, and that the linear trend is removed.
+
+ADF Test:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myadftest(rs) # stationary ?!
+```
+
+The ADF test shows no unit roots and that the model is stationary.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mykpsstest(rs) # not stationary
+```
+
+The KPSS test also shows no unit roots and that the model is stationary.
+
+Check for business cycles:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+p2 <- c(1,-m$coef)
+s2 <- polyroot(p2)    # if no imaginary part, no cycles
+(z = unique(round(sapply(all_complex(s2),period),digits=3)))   # lengths of business cycles
+```
+
+We still find the same two business cycles in the reduced model: 6-month and a 3-month cycles.
+
+
+### 3.6. Use the command polyroot in R to find the solutions of the characteristic equation of the refined AR($m33\$order$) model. How many real solutions are there?
+
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+p1 <- c(1,-m$coef[-6])
+s1 <- polyroot(p1)
+s1
+```
+
+The real number is the solution without an imaginary number, which is only one value at -1.600835+0.000000i.
+
+### 3.7. Compute the inverse of the absolute values of the solutions of the characteristic equation. Show the maximum value of the inverses. Does the maximum value imply that the AR($m33\$order$) model likely contains a unit root? Why?
+
+Solutions of the characteristic equation:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+Mod(s1)
+```
+
+Inverse absolute solutions of the characteristic equation:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+1/Mod(s1)
+```
+
+Maximum value of the inverses:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+max(1/Mod(s1))
+```
+
+While the KPSS and ADF tests indicate no unit roots, we also find two business cycles in the model. But since we are able to inverse the solutions to the characteristic equation, these inverses are characteristic roots to the model. That said, the max inverse is 0.7074, which is less than one. All characteristic roots are less than one, which makes the model stationary, such as what the KPSS and ADF tests indicate as well.
+
+While characteristic roots exist in the stationary model, they are less than 1. Therefore the characteristic roots are not unit roots, and in theory unit roots should not exist in a stationary model.
+
+
+### 3.8. Compare the fit of your best linear regression model and your best AR model. Which is preferred and why?
+
+Regression Model summary:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+summary(m31)
+```
+
+
+Full ARIMA(5,0,0)/Regression Model summary:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+summary(m34) # AICc=-393.23, lower RMSE/MAE
+```
+
+Reduced ARIMA(5,0,0)/Regression Model summary:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+summary(m35) # AICc=-394.59
+```
+
+Comparing the Full and Reduced ARIMA(5,0,0)/Regression Models, the Reduced model has a lower AICc of -394.59 compared to the Full model AICc of 393.23. The Full model has lower RMSE and MAE. Comparing these statistics seem to be marginal. That being said, AIC tends to favor more complex models, but the reduced model has a more favorable AIC than the full model. Because of this, based on these statistics, we would choose the reduced model of the full model.
+
+Fit regression model into ARIMA(0,0,0) white noise time series model
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+m311 <- Arima(y3t, order=c(0,0,0), xreg=y1t, include.mean=T)
+```
+
+
+
+```{r include=FALSE, warning=FALSE, message=FALSE}
+maa = auto.arima(y1t, d=1, stationary=F)
+y1tf <- forecast::forecast(maa, h=12)
+#nweeks <- (length(y1tf$fitted)-25):length(y1tf$fitted)
+#rm(nweeks)
+nmonths <- (length(y1tf$fitted)-23):length(y1tf$fitted)
+```
+
+Forecasting using the Regression Model:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# forecast using full model m34
+m <- Arima(y3t, order=c(0,0,0), xreg=y1t, include.mean=T)
+m38 <- m
+#fc <- forecast::forecast(m, xreg=y1tf$fitted[nweeks] ) # 26 week-forecast
+fc <- forecast::forecast(m, xreg=y1tf$fitted[nmonths] ) # 26 week-forecast
+autoplot(fc) +
+#  ggtitle(paste("Fama-Bliss Forecasted Yields for ", length(nweeks), "Months")) +
+  ggtitle(paste("Fama-Bliss Forecasted Yields for ", length(nmonths), "Months")) +
+  geom_vline(xintercept = nrow(X), col="red") +
+  xlab("Month") + ylab("Yield")
+# line still fairly straight, much smaller range
+```
+
+
+
+Forecasting using the full ARIMA(5,0,0)/Regression Model:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# forecast using full model m34
+m <- Arima(y3t, order=c(5,1,0), xreg=y1t, include.mean=T)
+m37 <- m
+#fc <- forecast::forecast(m, xreg=y1tf$fitted[nweeks] ) # 26 week-forecast
+fc <- forecast::forecast(m, xreg=y1tf$fitted[nmonths] ) # 26 week-forecast
+autoplot(fc) +
+#  ggtitle(paste("Fama-Bliss Forecasted Yields for ", length(nweeks), "Months")) +
+  ggtitle(paste("Fama-Bliss Forecasted Yields for ", length(nmonths), "Months")) +
+  geom_vline(xintercept = nrow(X), col="red") +
+  xlab("Month") + ylab("Yield")
+# line still fairly straight, much smaller range
+```
+
+Forecasting using the reduced ARIMA(5,0,0)/Regression Model:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# forecast using reduced model m35
+c36 <- c(NA,NA, 0,NA,NA,NA)
+m <- Arima(y3t, order=c(5,1,0), xreg=y1t, include.mean=T, fixed=c36)
+m36 <- m
+#fc <- forecast::forecast(m, xreg=y1tf$fitted[nweeks] ) # 26 week-forecast
+fc <- forecast::forecast(m, xreg=y1tf$fitted[nmonths] ) # 26 week-forecast
+autoplot(fc) +
+#  ggtitle(paste("Fama-Bliss Forecasted Yields for ", length(nweeks), "Months")) +
+  ggtitle(paste("Fama-Bliss Forecasted Yields for ", length(nmonths), "Months")) +
+  geom_vline(xintercept = nrow(X), col="red") +
+  xlab("Month") + ylab("Yield")
+# line still fairly straight, much smaller range - slightly smaller range than full model
+```
+
+Comparing the forecast results above, while the overall forecasts of both the full and reduced ARIMA(5,0,0)/regression models are not that great, the reduced ARIMA(5,0,0)/regression model has a slightly smaller 80/95% CI range than the full model, implying better accuracy. Therefore we would prefer the reduced ARIMA(5,0,0)/regression model forecast.
+
+The regression model forecast does not 'funnel outwards' like what the other two forecasts do, therefore short-term predictions for the regression model have a larger CI range. Because of that we find the regression model to perform worse than the other two models at forecasting.
+
+
+## 4. Report (20 points) 
+
+### For the Fama-Bliss bond yields analyses, choose what you think is the best model's outcomes and write an executive summary that allows stakeholders to make decisions or take action.
+
+(Based on the analysis, modelling, testing, and forecasting performed in sections 2 and 3, we will use the reduced ARIMA(5,0,0)/regression model as noted in section 3.8 for our forecasting executive report.)
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# forecast using reduced model m35
+fc <- forecast::forecast(m36, xreg=y1tf$fitted[nmonths] ) # 24 month-forecast
+autoplot(fc) +
+  ggtitle(paste("Fama-Bliss Forecasted Yields for ", length(nmonths), "Months")) +
+  geom_vline(xintercept = nrow(X), col="red") +
+  xlab("Month") + ylab("Yield")
+```
+
+This forecasting model attempts to predict 3-year bond yields for the next 24 months. The data is sourced from the Fama-Bliss Discount Bonds report provided by the Center for Research in Security Prices, LLC (CRSP) website which contains 53 years of monthly 1-year and 3-year bond yield data from January of 1961 (indexed as month 1) to December of 2013 (indexed as month 636). The forecast presented here is based on the prototyping and evaluation of several financial models, and selected the best-performing model developed from the time series modelling tools we currently have available.
+
+The forecast model shows the dark blue point forecast line slightly sloping down from the last 3-year yield data point of 0.804 to the predicted 3-year yield 24-months later to 0.758. In addition to the point forecast line we also have an 80% confidence interval (CI) shown by the blue area of possible values that could occur, as well as a 95% CI expanded in the lighter blue area. The CI ranges also include the possibility of negative yields by 21 months in the 80% CI and as early as 8 months for the 95% CI.
+
+Given our current time series modelling tools we would recommend to limit the use of this model to fairly short-term recommendations. Though we can see an overall general drop of 3-year bond yields in which the forecast point line shows, and have been at the lowest point the prior three years, despite the CI ranges and barring an economic crisis we don't think we'll realistically reach negative yields anytime soon. But from the model we should also understand yields will also not be dramatically increasing. We can generalize from the model short-term that 3-year bond yields will be similar as to what is currently happening, but can also expect that it could slightly drop within the next few months as well.
+
+We will continue to improve this model by iteration as our toolsets and knowledge base increases to hopefully provide longer term forecasts.

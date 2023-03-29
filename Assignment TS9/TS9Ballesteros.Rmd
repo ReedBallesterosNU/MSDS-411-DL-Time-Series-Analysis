@@ -1,0 +1,737 @@
+---
+output:
+  pdf_document: default
+  html_document: default
+---
+
+
+\begin{titlepage}
+   \begin{center}
+       \vspace*{1cm}
+
+       \LARGE
+       \textbf{Time Series 413, Assignment 9}
+
+       \vspace{0.5cm}
+
+       \Large
+       \textbf{Non-linear Modeling and Model Monitoring (TS9)}
+
+       \vspace{1.5cm}
+
+       \vfill
+
+       \Large
+       \textbf{Reed Ballesteros}
+
+       \vspace{0.8cm}
+       
+       \normalsize
+       Northwestern University SPS, Fall 2022\\
+       MSDS-413-DL\\
+       Instructor: Dr. Jamie D. Riggs, Ph.D\\
+       2022-11-21
+
+   \end{center}
+\end{titlepage}
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(fBasics)
+library(fpp2)
+library(tidyverse)
+library(lubridate)
+library(prophet)
+library(forecast)
+library(fBasics)
+library(ggplot2)
+source('ProphetOpt.R')
+source('My_Tests.R')
+
+#options(digits=4)
+```
+
+
+The following list defines the data sets and their respective variables.
+
+* AustralianWine.csv (volumes are 1000x Kiloliters)
+  + Month
+  + Fortified
+  + Red
+  + Rose
+  + sparkling
+  + Sweet.white
+  + Dry.white
+
+* Bike data (Washington, D.C.): https://www.kaggle.com/c/bike-sharing-demand/dataselect=train.csv, Filename: bikes.csv
+
+  + date-time: YYYY-MM-DD HH:MM:SS
+  + season: 1, 2, 3, or 4
+  + holiday: 0 = not a holiday, 1 = holiday
+  + workingday: 0 = not a workday, 1 = workday
+  + weather: 4 classes, 1, 2, 3, 4
+  + temp: temperature, degrees Celsius
+  + atemp: apparent temperature, degrees Celsius
+  + humidity: mm Hg
+  + windspeed: km/hr
+  + casual: 0 = not casual, 1 = casual
+  + registered: 0 = not registered, 1 = registered
+  + count: total number of bike rentals
+
+The objective is to explore the time series behavior of these data sets including EDA, modeling,
+model diagnostics, and interpretation.
+
+
+
+
+## 1. Exponential Smoothing (50 points). For this exercise, use the monthly Australian wine
+sales Fortified data. (Data set: AustralianWine.csv.)
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+X <- read.csv("AustralianWines.csv",header=T)
+y <- ts(X$Fortified,frequency=12)
+```
+
+
+### 1.1. Perform EDA. Why is a multiplicative seasonal model necessary?
+
+Let us plot the Australian Wines sales Fortified time series data:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+autoplot(y) # trends downward but has seasonal pattern
+```
+
+We notice a downward trend, with the seasonality getting smaller as the plot trends downwards over time.
+
+In regards to normalcy, we do not observe a mean 0, nor constant variance. We will not transform the data to make it fit a normal form as this exponential exercise does not require it.
+
+Histogram: Fortified Sales Data
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+hist(y)  # tall, right skewed
+```
+
+We see a right-skewed, somewhat tall histogram. The data is not normal based on a Gaussian PDF.
+
+Q-Q Plot: Fortified Sales Data
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+qqnorm(y); qqline(y) # most on line, ends flare upwards slightly
+```
+
+Most data is on the ideal normal line, but the tails flare upward.
+
+ACF Plot: Fortified Sales Data
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggAcf(y) # seasonal pattern
+```
+
+We can observe a season pattern of 12 months peak-to-peak.
+
+PACF Plot: Fortified Sales Data
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggPacf(y) # stationary-ish
+```
+
+We find the PACF plot to be fairly stationary, with few lags outside of the 95% confidence interval (CI) threshold.
+
+We will not conduct other tests for normalcy under a Gaussian PDF as exponential smoothing does not require times series data that fits a normal form.
+
+A multiplicative model is necessary for this particular time series due to that the seasonal component is not constant; we can see from the plot that the seasonality is decreasing based on the downward trend over time.
+
+From the decomposition:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+decomp <- stl(y, s.window="periodic")
+autoplot(decomp)
+```
+
+While we are able to decompose constant seasonal component and the trend separately, we can see with the downward level trend influence the seasonal component in the data over time in the data, thus the need for a multiplicative model over an additive one.
+
+### 1.2. Forecast the next two years using Holt-Winters multiplicative method.
+
+Forecast: Multiplicative Method
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+fit_multi <- hw(y,seasonal="multiplicative")
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+plot(forecast(fit_multi));grid(col="darkgray")
+```
+
+We observe a 2-year forecast continuing the downward trend, with the seasonal component getting smaller as well.
+
+Residuals: Multiplicative Method
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+checkresiduals(fit_multi)
+```
+
+The histogram of the residuals does not have the most ideal symmetry (somewhat right-skewed) but the plot shows close to mean 0 with signs of constant variance.
+
+### 1.3. Experiment with making the trend exponential and/or damped.
+
+Forecast: Exponential Trend
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+fit_multi_exp <- hw(y,seasonal="multiplicative",exponential=TRUE)
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+plot(forecast(fit_multi_exp));grid(col="darkgray")
+```
+
+We observe a 2-year forecast continuing the downward trend, with the seasonal component getting smaller as well. The exponential downward curve is subtle in this respect.
+
+Residuals: Multiplicative Method
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+checkresiduals(fit_multi_exp)
+```
+
+The histogram of the residuals has slightly better symmetry compared to the multiplicative model, and the plot shows close to mean 0 with signs of constant variance.
+
+Forecast: Multiplicative Method, Damped
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+fit_multi_damped <- hw(y,seasonal="multiplicative",damped=TRUE)
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+plot(forecast(fit_multi_damped));grid(col="darkgray")
+```
+
+We observe the trend to slightly rise and plateau, which is the usual effect of a damping forecast.
+
+Residuals: Multiplicative Method, Damped
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+checkresiduals(fit_multi_damped)
+```
+
+The histogram of the residuals display slightly better symmetry the plot also shows mean 0 with signs of constant variance.
+
+Forecast: Multiplicative Method, Exponential and Damped
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+fit_multi_exp_damped <- hw(y, seasonal="multiplicative", exponential=TRUE, damped=TRUE)
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+plot(forecast(fit_multi_exp_damped));grid(col="darkgray")
+```
+
+We observe the trend to to slightly flatten, the result of integrating both exponential and damped effects.
+
+Residuals: Multiplicative Method, Exponential and Damped
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+checkresiduals(fit_multi_exp_damped)
+```
+
+The histogram of the residuals display better symmetry than the other models, but still right-skewed, with the plot also showing mean 0 with signs of constant variance.
+
+### 1.4. Compare the RMSE of the one-step forecasts from the various methods. Which do you prefer?
+
+RMSE: Multiplicative Method
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# Multiplicative Method
+accuracy(fit_multi)
+```
+
+RMSE: Multiplicative with Exponential Trend
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# Exponential trend
+accuracy(fit_multi_exp)
+```
+
+RMSE: Multiplicative with  Damped Trends
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# Damped Trend
+accuracy(fit_multi_damped)
+```
+
+RMSE: Multiplicative with Exponential and Damped Trends
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# Exponential and Damped Trends
+accuracy(fit_multi_exp_damped)
+```
+
+The model fitted with only the multiplicative seasonal trend yields the lowest RMSE of 281.1189, thus being the best-fitting model of the four we tested. It also follows the general multiplicative seasonal trend of the time series data, as we can observe and compare from the respective plots.
+
+### 1.5. Now fit each of the following models to the same data using ets:
+
+#### 1.5.1. a multiplicative Holt-Winters method
+
+
+
+Forecast: Multiplicative Method
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+fit_multi <- hw(y,seasonal="multiplicative")
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+plot(forecast(fit_multi));grid(col="darkgray")
+```
+
+We observe a 2-year forecast continuing the downward trend, with the seasonal component getting smaller as well.
+
+Residuals: Multiplicative Method
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+checkresiduals(fit_multi)
+```
+
+The histogram of the residuals does not have the most ideal symmetry (somewhat right-skewed) but the plot shows close to mean 0 with signs of constant variance.
+
+#### 1.5.2. an ETS model
+
+
+
+Forecast: ETS Model
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+# ETS model
+fit_mam <- ets(y, model="MAM")
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+plot(forecast(fit_mam));grid(col="darkgray")
+```
+
+We also observe a 2-year forecast continuing the downward trend, similar to the multiplicative model, with the seasonal component getting smaller as well.
+
+Residuals: ETS Model
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+checkresiduals(fit_mam)
+```
+
+The histogram of the residuals of the ETS model has better symmetry and the plot shows close to mean 0 with signs of constant variance.
+
+
+#### 1.5.3. an additive ETS model applied to a Box-Cox transformed series
+
+
+
+
+Forecast: Additive ETS Model with Box-Cox Transformation
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+# Additive ETS model with Box-Cox transformation
+fit_ana_box <- ets(y,additive.only=TRUE,lambda="auto")
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+plot(forecast(fit_ana_box));grid(col="darkgray")
+```
+
+We observe a 2-year forecast continuing the downward trend, with the seasonal component getting smaller as well. It is not dramatically different from the previous two models.
+
+Residuals: Additive ETS Model with Box-Cox Transformation
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+checkresiduals(fit_ana_box)
+```
+
+The histogram of the residuals of the ETS Box-Cox model has improved symmetry and the plot shows close to mean 0 with signs of constant variance.
+
+#### 1.5.4. a seasonal naive method applied to the Box-Cox transformed series
+
+
+
+Forecast: Seasonal Naive Model with Box-Cox Transformation
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+# Seasonal naive with Box-Cox transformation
+fit_naive <- snaive(y,lambda="auto")
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+plot(forecast(fit_naive));grid(col="darkgray")
+```
+
+The two-year forecast is very interesting as it seems to mimic the last seasonal time series data, with the trend starting to flatten. We also notice the confidence interval noted by the grey areas to get wider in the second year of the forecast compared to the first year.
+
+Residuals: Seasonal Naive Model with Box-Cox Transformation
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+checkresiduals(fit_ana_box)
+```
+
+The histogram of the residuals of the seasonal naive model has decent symmetry and the plot shows close to mean 0 with signs of constant variance.
+
+#### 1.5.5. a STL decomposition applied to the Box-Cox transformed data plus ETS model applied to the seasonally adjusted (transformed) data.
+
+
+
+Forecast: STL decomposition with Box-Cox transformation on ETS
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+# STL decomposition with Box-Cox transformation on ETS
+fit_stld <- stlf(y,method="ets",lambda="auto")
+```
+
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+plot(forecast(fit_stld));grid(col="darkgray")
+```
+
+We observe a 2-year forecast continuing the downward trend, with the seasonal component getting smaller as well. It is not dramatically different from the multiplicative or default ETS model.
+
+Residuals: STL decomposition with Box-Cox transformation on ETS
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+checkresiduals(fit_ana_box)
+```
+
+The histogram of the residuals of the ETS model has good symmtry and the plot shows close to mean 0 with signs of constant variance.
+
+### 1.6. For each model, look at the residual diagnostics and compare the forecasts for the next two years. Which do you prefer?
+
+RMSE: Multiplicative Method
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+accuracy(fit_multi)
+```
+
+RMSE: ETS Model
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+accuracy(fit_mam)
+```
+
+RMSE: ETS Model with Box-Cox Transformation
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+accuracy(fit_ana_box)
+```
+
+RMSE: Seasonal Naive Model with Box-Cox Transformation
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+accuracy(fit_naive)
+```
+RMSE: STL decomposition with Box-Cox transformation on ETS
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+accuracy(fit_stld)
+```
+
+The model with STL decomposition and Box-Cox transformation on ETS from section 1.5.5 yields the lowest RMSE of 236.7522, thus being the best fitting model of the five we tested.
+
+
+## 2. Prophet 1 (25 points) Use the bikes data to forecast bike rentals using Prophet.
+
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+bikes <- read_csv('bikes.csv')
+X <- bikes
+X$datetime <- date(X$datetime)
+#str(X)
+H <- X   # holding matrix
+```
+
+
+### 2.1. EDA. Then partition the data using the 2011 data as a training data. Partition the first 6 months of the 2012 data as a validation data set. Use the last 6 months of 2012 as a test data set.
+
+We will aggregate the data from hourly counts to daily counts:
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+XAgg <- aggregate(X$count, list(X$datetime), sum)
+names(XAgg) <- c('ds', 'y')
+```
+
+
+After aggregation, we want to check to see if the data is a valid time series dataset.
+
+Let's check for unique dates:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# validate time series
+length(unique(XAgg$ds))
+length(XAgg$ds)
+# ok
+```
+
+There are 456 unique dates for all the 456 observations, indicating there are no repeated dates.
+
+Let's check to see if all dates have the same time spans (in days) between them:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+nrow(XAgg)
+difX <- diff(XAgg$ds)
+table(difX)
+# not ok
+```
+
+From the test above we see varying lengths of time spans in the dataset, thus the time series data is not a valid dataset. That being said, Facebook Prophet can still create forecasts using time series data that is not fully validated.
+
+That being said, we will plot and decompose the data.
+
+Plot: Aggregated bike data
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggplot() + geom_line(data = XAgg, aes(x = ds, y = y))
+```
+
+We notice higher counts of bike rides during the summer season and lower counts of bike rides during the winter season. Overall though, year-by-year, we notice an increase of bike activity in the second year (2012) compared to the first year (2011).
+
+We will attempt to decompose the data into four seasons of each year:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+countTs57 = ts(XAgg$y, frequency=57)
+decompCounts57 <- stl(countTs57, s.window="periodic")
+autoplot(decompCounts57)
+```
+
+Based on the high frequency of 57 we are able to capture winter spring, summer and fall seasonal activity and get a generalized trend which shoes disctint seasonal activit and overall year-by-year growth.
+
+We will create an aggregated training data set using the first year of the time series data:
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+# Training data, 1 year
+A <- X[X$datetime < ymd("2012-01-01"), c(1,12)]
+Tr <- aggregate(A$count, list(A$datetime), sum)
+names(Tr) <- c('ds', 'y')
+```
+
+Plotted training data for the first year:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggplot() + geom_line(data = Tr, aes(x = ds, y = y))
+```
+
+We see a rise in bike activity as the year goes into the warmer months, and a decrease when going into colder months. The end of the year ends higher than the beginning of the year showing overall growth going into the next year.
+
+We will create an aggregated validation data set using the first half of the second year of the time series data:
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+# Validation data, 6 months
+A <- X[X$datetime >= ymd("2012-01-01") & X$datetime <= ymd("2012-06-30"), c(1,12)] 
+V <- aggregate(A$count, list(A$datetime), sum)
+names(V) <- c('ds', 'y')
+rm(A)
+```
+
+Plot: 
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggplot() + geom_line(data = V, aes(x = ds, y = y))
+```
+
+From the validation data we see a rise in bike activity as the the first half of 2012 transitions from the winter to the summer.
+
+We will create an aggregated test data set using the second half of the second year of the time series data:
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+# Test data, 6 months
+A <- X[X$datetime >= ymd("2012-07-01"), c(1,12)]    # X$datetime,X$count
+Te <- aggregate(A$count, list(A$datetime), sum)   # training set
+names(Te) <- c('ds', 'y')   # Prophet uses only these names
+rm(A)
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggplot() + geom_line(data = Te, aes(x = ds, y = y))
+```
+
+From the testing data we again see a drop in bike activiy in the second half of the year as it transitions from summer to winter.
+
+
+### 2.2. Define the marked holidays by name.
+
+The original time series data has the following holidays:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+h <- unique(X[X$holiday==1, 1])
+h$holiday = c('Martin Luther King', 'Emancipation Day', 'Independence Day',
+              'Labor Day', 'Columbus Day', 'Veterans Day', 'New Year', 
+              'Martin Luther King', 'Emancipation Day', 'Independence Day',
+              'Labor Day', 'Columbus Day', 'Veterans Day')
+names(h) <- c('ds', 'holiday')
+h
+```
+
+
+### 2.3. Construct a Prophet model using the default values for seasonality and changepoints using the training data. Use the holidays as defined above. Describe the model components.
+
+We create the following default Facebook Prophet model only using the holidays defined in section 2.2:
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+m <- prophet(Tr, holidays = h, yearly.seasonality = TRUE)
+m1 <- m
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+future <- make_future_dataframe(m, periods = 365)    # Training data is only until the end of 2011; need to forecast a whole year (2012)
+Fc <- predict(m, future)
+F1 <- Fc
+```
+
+We have the following components from the default Prophet model:
+
+```{r}
+prophet_plot_components(m, Fc)
+```
+
+The Prophet model has an overall upward trend component. The holiday component shows Emancipation Day, Independence Day, and Columbus Day influence a positive spike in bike ride counts, while other holidays such as Martin Luther King Day, Labor Day, and Veterans Day have a negative impact on bike rides. Interestingly, New Year's day does not seem to influence bike rides, even though it is included in the list of holidays. The weekly component shows that Wednesdays have the lowest amount of bike rides in the week, while the ends of the work week such as Monday and Friday yield the most bike rides. The yearly component shows that summer days have a more positive impact on bike rides as opposed to days in the winter seasons. 
+
+### 2.4. Forecast the next 6 months from the default model. Plot the training data followed by the forecasted data. Describe the plot.
+
+We predict and plot the bike count activity for 2012 based on the training data which covers 2011:
+
+The default Prophet model predicts a rise in bike counts as it transitions from the colder to warmer seasons, then drops back down as the year gets colder. Overall it anticipates more bike activity in 2012 comapred to 2011.
+
+We find that the default Prophet prediction for 2012 looks slightly higher compared to the validation (green dots) and testing (red dots) data that covers 2012, but is able to cover the general trend well, especially with anticipating an overall rise in bike usage for the year.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+gp1 <- ggplot() + 
+    geom_point(data = Tr, aes(x = as.POSIXct(ds), y = y), size = 0.7) +
+    geom_point(data = V, aes(x = as.POSIXct(ds), y = y), size = 0.7, color = 'green4') +
+    geom_point(data = Te, aes(x = as.POSIXct(ds), y = y), size = 0.7, color = 'red') +
+    geom_line(data = Fc, aes(x = ds, y = yhat), color = "blue4") +
+    geom_ribbon(data = Fc, aes(x = ds, ymin = yhat_lower, ymax = yhat_upper), fill = "blue", alpha = 0.2) +
+    labs(subtitle = "Default Prophet Model", x = "Date")
+gp1
+```
+
+### 2.5. Produce forecast accuracy measures based on the validation data, RMSE and MAPE. What do they tell us?
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+acc1 <- forecast::accuracy(Fc[ymd(Fc$ds) %in% V$ds, ]$yhat, V$y)[ , c("RMSE","MAPE")]
+acc1
+```
+
+The default Prophet model gives us an RMSE score of 1292.8868 and MAPE score of 27.5712, giving us a baseline to compare with tuned models we will develop in section 3.
+
+
+## 3. Prophet 2 (25 points) Use the bike data to refine the Prophet model as follows:
+
+### 3.1. Create a matrix of changepoint flexibiity values, seasonal strength values, holiday strength values, set growth as logistic, and set capacity levels. Describe how the column values in the matrix change relative to each other.
+
+We create a matrix below based on various combinations of changepoint, seasonality, holidays, capacity, and logistic growth.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+```
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+A <- expand.grid(
+				 cps = c(0.05, 0.25, 0.5, 0.8), # changepoint prior scale, default 0.8
+                 sps = c(1, 10),    # seasonality prior scale, default 10, try lower
+                 hps = c(1, 10),    # holidays prior scale, default 10, try lower
+                 capacity = c(7000, 8000), # max training ~6000, try higher as in Te
+                 growth = "logistic"     # rather than linear
+                 )
+A$growth <- as.character(A$growth)
+A
+```
+
+
+### 3.2. Using MAPE as the selection criterion, find and list the optimum parameter set from the matrix constructed above.
+
+Using the matrix in the section above, along with the training and validation data, and holidays list, we are able to find the following parameters from the matrix to build a more optimal Prophet model:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# Resample for best parameters
+fit.stats <- vector(mode = 'numeric', length = nrow(A))
+fit.stats <- apply(A, 1, m.opt, X.train=Tr, X.validation=V, holidays=h)
+fit.stats <- t(fit.stats)
+
+A <- cbind(A, fit.stats)
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+MAPE.min <- A[A$MAPE == min(fit.stats), ]
+MAPE.min
+```
+
+Prophet's suggestion of the optimal parameters above would yield a model with an RMSE of 1195.272 and an MAPE of 24.99066, which are lower values then the default Prophet model.
+
+### 3.3. Retrain the Prophet model using the training data, the validation data, and the optimum parameters from above. Compare the optimum model components with the default model components.
+
+We develop the following Prophet model using the optimized parameters above along with the training and validation data:
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+    reTr <- bind_rows(Tr, V)
+reTr$cap <- MAPE.min$capacity
+
+m <- prophet(reTr, growth=MAPE.min$growth, holidays = h,
+			 seasonality.prior.scale = MAPE.min$sps,
+			 changepoint.prior.scale = MAPE.min$cps,
+             holidays.prior.scale = MAPE.min$hps,
+             yearly.seasonality = TRUE)
+m2 <- m
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+future <- make_future_dataframe(m, periods = 184)  # 6 months
+future$cap <- MAPE.min$capacity
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+Fc <- predict(m, future)
+F2 <- Fc
+```
+
+The new model provides the following components:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+prophet_plot_components(m, Fc)
+```
+
+The trend component shows a slight damp in the prediction, with some plateauing into a flat. Holiday impacts are similar to the default model but also denotes a negative spike in bike rides on New Year's day, which wasn't shown on the default model. While Wednesdays in this model also yield the lowest amount of bike rides in the week,  it differs such that the second half of the week yields more bike rides than the first half. The yearly component is very similar to the default model, where summer days positively impact rides while winter days have a negative impact.
+
+
+### 3.4. Forecast the next 6 months from the optimum model. Plot the data followed by the forecasted data. Describe the plot and compare it to the default model plot.
+
+We create the following plot for the 2nd half of 2012 using the optimized Prophet model fitted with the training (black dots) and validation (green dots) data, with the test data (red dots) shown:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+
+# Optimized model plot
+gp2 <- ggplot() + 
+    geom_point(data=Tr,  aes(x=as.POSIXct(ds), y=y), size=0.7) +
+    geom_point(data=V,   aes(x=as.POSIXct(ds), y=y), size=0.7, color="green4") +
+    geom_point(data=Te,  aes(x=as.POSIXct(ds), y=y), size=0.7, color="red") +
+    geom_line( data=Fc,  aes(x=ds, y = yhat), color="blue4") +
+    geom_ribbon(data=Fc, aes(x=ds, ymin=yhat_lower, ymax=yhat_upper), fill="blue", alpha=0.2) +
+    labs(subtitle="Optimized Prophet Model", x="Date")
+gp2
+```
+
+The predicted data from 2012-07 to 2012-12 lines up quite well with the test data, accounting for slight rise in activity at the beginning of the fall season and the drop as it heads into the colder end of the year.
+
+Comparing with the default Prophet model:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+gp1
+```
+
+We find the default model to slightly overestimate its prediction. That being said, the default model was fitted using the training data which only covers 2011.
+
+### 3.5. Produce, describe, and compare forecast accuracy measures based on the test data, RMSE and MAPE with those of the default model.
+
+RMSE and MAPE: Optimized Prophet Model
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+acc2 <- forecast::accuracy(Fc[ymd(Fc$ds) %in% Te$ds, ]$yhat, Te$y)[ , c('RMSE','MAPE')]
+acc2
+```
+
+RMSE and MAPE: Default Prophet Model
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+acc1
+```
+
+We find the optimized Prophet model to have notably lower RMSE (1040.97173) and MAPE (14.10718 ) scores compared to the default model, quantitatively making the optimized model the better-fitting one.
+

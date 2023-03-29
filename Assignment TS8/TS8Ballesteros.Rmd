@@ -1,0 +1,710 @@
+---
+output:
+  pdf_document: default
+  html_document: default
+---
+
+
+\begin{titlepage}
+   \begin{center}
+       \vspace*{1cm}
+
+       \LARGE
+       \textbf{Time Series 413, Assignment 8}
+
+       \vspace{0.5cm}
+
+       \Large
+       \textbf{Multivariate Volatility Models (TS8)}
+
+       \vspace{1.5cm}
+
+       \vfill
+
+       \Large
+       \textbf{Reed Ballesteros}
+
+       \vspace{0.8cm}
+       
+       \normalsize
+       Northwestern University SPS, Fall 2022\\
+       MSDS-413-DL\\
+       Instructor: Dr. Jamie D. Riggs, Ph.D\\
+       2022-11-14
+
+   \end{center}
+\end{titlepage}
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(fBasics)
+library(fpp2)
+library(car)
+library(curl)
+library(quantmod)
+library(FinTS)
+library(PerformanceAnalytics)
+library(ggpmisc)
+library(tseries)
+library(fGarch)
+library(rugarch)
+library(rmgarch)
+library(MTS)
+library(vars)
+library(MVN)
+#library(devtools)
+source("covEWMA.r")
+source('My_Tests.R')
+
+options(digits=4)
+```
+
+
+The daily prices of Microsoft (MSFT) stock and the S&P index are available for download in
+the TS8.R file.
+
+* Date: year, month, and day
+* MSFT.Adjusted: Microsoft adjusted closing prices
+* GSPC.Adjusted: S&P adjusted closing prices
+
+The objective is to explore the time series behavior of these data sets including EDA, modeling, model diagnostics, and interpretation.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# download data
+symbol.vec <- c("MSFT", "^GSPC")
+getSymbols(symbol.vec, from ="2000-01-03", to = "2022-10-31")
+
+# extract adjusted closing prices
+MSFT <- MSFT[, "MSFT.Adjusted", drop=F]
+GSPC <- GSPC[, "GSPC.Adjusted", drop=F]
+
+# calculate log-returns for GARCH analysis
+#MSFT.ret <- CalculateReturns(MSFT, method="log")
+#GSPC.ret <- CalculateReturns(GSPC, method="log")
+
+# remove first NA observation
+#MSFT.ret <- MSFT.ret[-1,]
+#GSPC.ret <- GSPC.ret[-1,]
+#colnames(MSFT.ret) <-"MSFT"
+#colnames(GSPC.ret) <- "GSPC"
+
+# create combined data series
+#MSFT.GSPC.ret <- merge(MSFT.ret,GSPC.ret)
+```
+
+
+## 1. Closing prices (60 points)
+
+Use the daily adjusted closing prices on Microsoft and the S&P 500 over the period 2000-01-03 to 2022-10-31 to compute the continuously compounded returns.
+
+### 1.1. Perform EDA on the Microsoft and S&P daily prices.
+
+Find an additive time series without a trend.
+
+EDA: MSFT
+
+Plot: MSFT
+
+Let us plot the daily adjust closing prices of Microsoft from 2000-01-03 to 2022-10-31.
+
+Plot: MSFT
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+autoplot(MSFT) #
+```
+
+We see a generally curving upward trend up until the end of November 2021, which corresponds to the announcement of the COVID-19 Omicron variant. We and need to transform the data such that we can remove the trend.
+
+We will calculate the compound returns from the prices of Microsoft stock using the PerformanceAnalytics::CalculateReturns(MSFT) method in R and plot it as MSFT.ret:
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+# calculate log-returns for GARCH analysis
+MSFT.ret <- CalculateReturns(MSFT, method="log")
+
+# remove first NA observation
+MSFT.ret <- MSFT.ret[-1,]
+colnames(MSFT.ret) <-"MSFT"
+```
+
+Plot: MSFT.ret
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+autoplot(MSFT.ret) # 
+```
+
+From the PerformanceAnalytics::CalculateReturns(MSFT) transformation plot above we can observe a mean 0 but we will further test the returns below to confirm it. We do not observe constant variance.
+
+Histogram: MSFT.ret
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+hist(MSFT.ret)  # tall, slightly left skewed but otherwise fairly symmetric
+```
+
+The histogram of MSFT.ret shows tall (excess) Kurtosis and slight left skewness; otherwise it the plot is almost symmetrical, but not normal based on a Gaussian PDF.
+
+Q-Q Plot: MSFT.ret
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+qqnorm(MSFT.ret); qqline(MSFT.ret) # thick tails showing tall kurtosis; left tail has slightly more trailing outiers indicating slihgt left skewness
+```
+
+The Q-Q plot shows thick tails indicating tall Kurtosis. The extra trailing outliers on the left indicate the slight left skewness.
+
+ACF Plot: MSFT.ret
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggAcf(MSFT.ret) # 
+```
+
+The ACF plot shows the MSFT.ret time series data as fairly stationary, with few lags exceeding the 95% confidence interval (CI) threshold range. That said, the exceeding lag values are still very small.
+
+PACF plot: MSFT.ret
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggPacf(MSFT.ret) # 
+```
+
+The PACF plot is fairly stationary as well.
+
+T-Test for Mean 0: MSFT.ret
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myttest(MSFT.ret) # 
+```
+
+The 95% CI for the T-test includes 0 indicating that the mean for MSFT.ret data is statistically 0, indicating a trend is not present.
+
+Skewness: MSFT.ret
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myskewtest(MSFT.ret) # 
+```
+
+The test confirms left skewness for the MSFT.ret data.
+
+(excess) Kurtosis: MSFT.ret
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mykurttest(MSFT.ret) # 
+```
+
+The test confirms tall (excess) Kurtosis for the MSFT.ret data.
+
+Breusch-Pagan Test for Constant Variance: MSFT.ret
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mybptest(MSFT.ret) # *NON*-constant variance
+```
+
+The Breusch-Pagan test confirms non-costant variance for the MSFT.ret data.
+
+Box-Ljung Test for Lag Dependency/Serial Autocorrelation: MSFT.ret
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myboxljungtest(MSFT.ret) # lag dependence, serial autcorrelation
+```
+
+We observe that the MSFT.ret data contains lag dependency and serial correlation.
+
+EDA: GSPC
+
+Let us plot the daily adjust closing prices of the S$P 500 index from 2000-01-03 to 2022-10-31.
+
+Plot: GSPC
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+autoplot(GSPC) #
+```
+
+We see a generally curving upward trend of the S&P 500 index with the exception of some dips which coincide with major financial events such as the Dot-Com loss, the 2008 financial crisis, the early 2016 stock market selloff, the 2018 US Government shutdown, the start of the COVID-19 global pandemic, the COVID-19 Omicron variant, and the war in Ukraine.
+
+We will calculate the compound returns from the prices of Microsoft stock using the PerformanceAnalytics::CalculateReturns(GSPC) method in R and plot it as GSPC.ret:
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+# calculate log-returns for GARCH analysis
+GSPC.ret <- CalculateReturns(GSPC, method="log")
+
+# remove first NA observation
+GSPC.ret <- GSPC.ret[-1,]
+colnames(GSPC.ret) <- "GSPC"
+```
+
+Plot: GSPC.ret
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+autoplot(GSPC.ret) # 
+```
+
+From the PerformanceAnalytics::CalculateReturns(GSPC) transformation plot above we can observe a mean 0 but we will further test the returns below to confirm it. We do not observe constant variance.
+
+Histogram: GSPC.ret
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+hist(GSPC.ret)  # 
+```
+
+The histogram of GSPC.ret shows tall (excess) Kurtosis and slight left skewness; otherwise it the plot is almost symmetrical, but not normal based on a Gaussian PDF.
+
+Q-Q Plot: GSPC.ret
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+qqnorm(GSPC.ret); qqline(GSPC.ret) # 
+```
+
+The Q-Q plot shows thick tails indicating tall Kurtosis. The extra trailing outliers on the left indicate the slight left skewness.
+
+ACF Plot: GSPC.ret
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggAcf(GSPC.ret) # 
+```
+
+The ACF plot shows the GSPC.ret time series data as fairly stationary, with few lags exceeding the 95% confidence interval (CI) threshold range. That said, the exceeding lag values are still very small.
+
+PACF plot: GSPC.ret
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggPacf(GSPC.ret) # 
+```
+
+The PACF plot is fairly stationary as well.
+
+T-Test for Mean 0: GSPC.ret
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myttest(GSPC.ret) # mean 0
+```
+
+The 95% CI for the T-test includes 0 indicating that the mean for GSPC.ret data is statistically 0, indicating a trend is not present.
+
+Skewness: GSPC.ret
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myskewtest(GSPC.ret) # 
+```
+
+The test confirms left skewness for the GSPC.ret data.
+
+(excess) Kurtosis: GSPC.ret
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mykurttest(GSPC.ret) # 
+```
+
+The test confirms tall (excess) Kurtosis for the GSPC.ret data.
+
+Breusch-Pagan Test for Constant Variance: MSFT.ret
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mybptest(GSPC.ret) # constant variance, homoscedastic
+```
+
+The Breusch-Pagan test confirms non-costant variance for the GSPC.ret data.
+
+Box-Ljung Test for Lag Dependency/Serial Autocorrelation: GSPC.ret
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myboxljungtest(GSPC.ret) # lag dependency, serial autocorrelation
+```
+
+We observe that the GSPC.ret data contains lag dependency and serial correlation.
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+# create combined data series
+MSFT.GSPC.ret <- merge(MSFT.ret,GSPC.ret)
+```
+
+Let us create a scatterplot between the transformed returns of Microsoft and the S&P 500 index:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# scatterplot of returns
+reg <- y ~ -1 + x
+X <- data.frame(MSFT.GSPC.ret)
+p <- ggplot(data = X, aes(x = MSFT, y = GSPC)) +
+  geom_smooth(method = "lm", se=FALSE, color="red", formula = reg) +
+  stat_poly_eq(formula = reg,
+               eq.with.lhs = "italic(hat(y))~`=`~",
+               aes(label = paste(..eq.label.., ..rr.label.., sep = "*plain(\",\")~")), 
+               parse = TRUE) +         
+  geom_point()
+p
+```
+
+We see somewhat of an upward linear relationship between both returns but overall mostly hovering near zero. The R-squared is 0.5, indicating that 50% of the variance of the transformed returns of the S&P 500 Index is explained by the transformed returns of Microsoft stock.
+
+We will compute the cross-correlation matrix between the transformed returns:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+cor(MSFT.GSPC.ret);cor(MSFT.GSPC.ret)[1,2]^2
+```
+
+Again we see an R-Squared value near 0.5, indicating that 50% of the variance of the transformed returns of the S&P 500 Index is explained by the transformed returns of Microsoft stock.
+
+Let us test multivariate normality for MSFT.ret and GSPC.ret:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mvn(X, mvnTest="mardia")
+```
+
+There is no multivariate normality between the transformed returns of Microsoft stock and the S&P 500 index, indicated by the skewness and Kurtosis are not near 0. 
+
+
+### 1.2. First, estimate an ARCH(5) model for each series.
+
+What is the sum of the ARCH coefficients? What does the sum tell you?
+
+Let's perform a univariate test for ARCH effects for MSFT.ret:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ArchTest(MSFT.ret, lags=5)
+```
+
+We find that there are ARCH effects for up to 5 lags.
+
+We create the following ARCH(5) model for MSFT.ret:
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+m <- tseries::garch(MSFT.ret, order=c(0,5), trace = F)
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+m1.21 <- m
+summary(m)
+```
+
+The MSFT.ret residuals are not symmetric at the Min/Max and the Jaques-Bera test for Gaussian residuals fails. All the coefficients a0 to a5 are statistically significant. The Box-Ljung test suggests there are no ARCH effects on the squared residuals (p-value = 0.2 > 0.05).
+
+The sum of all coefficients for the MSFT.ret ARCH(5) model: 
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+sum(coef(m))
+```
+
+The sum of 0.7764 suggests model volatility forecasts are somewhat quick in mean-reverting but not very persistent.
+
+Let's perform a univariate test for ARCH effects for GSPC.ret:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ArchTest(GSPC.ret, lags=5)
+```
+
+We find that there are ARCH effects for up to 5 lags.
+
+We create the following ARCH(5) model for GSPC.ret:
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+m <- tseries::garch(GSPC.ret, order=c(0,5), trace = F)
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+m1.22 <- m
+summary(m)
+```
+
+The GSPC.ret residuals are somewhat symmetric at the Min/Max and the Jaques-Bera test for Gaussian residuals fails. The coefficients are statistically significant. The Box-Ljung test suggests there are no ARCH effects on the squared residuals (p-value = 0.7 > 0.05).
+
+The sum of all coefficients for the GSPC.ret ARCH(5) model: 
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+sum(coef(m))
+```
+
+
+The sum of 0.8417 suggests model volatility forecasts are not too quick with mean-reverting, as well as not very persistent.
+
+### 1.3. Next, estimate a GARCH(1,1) model for each series. 
+
+What is the sum of the GARCH coefficients? Interpret and compare with the ARCH sum.
+
+We create the following GARCH(1,1) model for MSFT.ret:
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+m <- fGarch::garchFit(MSFT.ret ~ garch(1, 1), data = MSFT.ret, trace = F)
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+m1.31 <- m
+summary(m)
+```
+
+The Jaques-Bera test for Gaussian residuals fails (p-value = 0 < 0.05). The coefficients are statistically significant. The LM test suggests there are no ARCH effects on the squared residuals (p-value = 0.9972 > 0.05).
+
+The sum of all coefficients for the MSFT.ret GARCH(1,1) model: 
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+sum(coef(m))
+```
+
+The sum of 0.9827 means the GARCH(1,1) MSFT.ret model exhibits slow mean reverting, much slower than the 0.7764 for the ARCH(0,5) model, but much higher persistence as well, almost to 1.
+
+We create the following GARCH(1,1) model for GSPC.ret:
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+m <- fGarch::garchFit(GSPC.ret ~ garch(1, 1), data = GSPC.ret, trace = F)
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+m1.32 <- m
+summary(m)
+```
+
+The Jaques-Bera test for Gaussian residuals fails (p-value = 0 < 0.05). All Greek coefficients are statistically significant. The LM test suggests there are no ARCH effects on the squared residuals (p-value = 0.1653 > 0.05).
+
+The sum of all coefficients for the GSPC.ret GARCH(1,1) model: 
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+sum(coef(m))
+```
+
+The sum of 0.9827 means the GARCH(1,1) GSPC.ret model exhibits slow mean reverting, much slower than the 0.8417 for the ARCH(0,5) model, but much higher persistence as well, almost to 1.
+
+### 1.4. Using a 20-day moving window, compute and plot rolling covariances and correlations.
+
+Briefly comment on what you see.
+
+Computing the rolling covariances and correlations:
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+cor.fun <- function(x){
+  cor(x)[1,2]
+}
+
+cov.fun <- function(x){
+  cov(x)[1,2]
+}
+
+roll.cov <- rollapply(as.zoo(MSFT.GSPC.ret), FUN=cov.fun, width=20, by.column=FALSE, align="right")
+roll.cor <- rollapply(as.zoo(MSFT.GSPC.ret), FUN=cor.fun, width=20, by.column=FALSE, align="right")
+```
+
+Plot of the rolling covariances and correlations:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+par(mfrow=c(2,1))
+plot(roll.cov, main="20-day rolling covariances",
+     ylab="covariance", lwd=2, col="blue")
+grid(col="gray")
+abline(h=cov(MSFT.GSPC.ret)[1,2], lwd=2, col="red")
+plot(roll.cor, main="20-day rolling correlations",
+     ylab="correlation", lwd=2, col="blue")
+grid(col="gray")
+abline(h=cor(MSFT.GSPC.ret)[1,2], lwd=2, col="red")
+par(mfrow=c(1,1))
+```
+
+The rolling covariance for a 20-day window above shows almost 0 covariance between MSFT.ret and GSPC.ret, which means most of the time MSFT.ret does not influence GSPC.RET in variance, or vice versa. That being said, we do notice some major spikes of volatility in the plot, coinciding with major financial events during the given time period, such as the .com losses in the early 2000s, the housing market crash of 2008, and the beginning of the COVID-19 pendemic in March of 2020. While the spikes go up as far as just over 0.004, indicating that MSFT.ret is leading over GSPC.ret at those times, we are not aware how much this really impacts the relationship between the two datasets as rolling covariance is scale dependent and we are not aware of the scale in context. While the spike of above 0.004 at the beginning of the COVID-19 pandemic seems like fairly small number, without the lower and upper bounds in scale we cannot fully determine how influential these leading spikes can be unless we have the proper context.
+
+The rolling correlation for a 20-day window shows a different story. The plot shows that MSFT.ret typically leads over GSPC.ret in correlation. As correlation is standardized, we can see that the average rolling correlation between them is 0.7061, which in a 0 to 1 scale is an indication of MSFT.ret having a strong influential correlation lead.
+
+### 1.5. Let $r_t = (r_MSFT,t,r_GSPC,T)^T$.
+
+Using the __dccfit()__ function from the __rmgarch__ package, estimate the normal-DCC(1,1) model. Briefly comment on the estimated coefficients and the fit of the model.
+
+Let us create a normal GARCH(1,1) mean model specification:
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+# univariate normal GARCH(1,1) for each series
+garch11.spec <- ugarchspec(mean.model = list(armaOrder = c(0,0)), variance.model = list(garchOrder = c(1,1), model = "sGARCH"), distribution.model = "norm")
+```
+
+From the normal GARCH(1,1) model we will create the DCC model specification:
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+# dcc specification - GARCH(1,1) for conditional correlations
+dcc.garch11.spec <- dccspec(uspec = multispec( replicate(2, garch11.spec) ), dccOrder = c(1,1), distribution = "mvnorm")
+```
+
+We will fit the normal-DCC(1,1) model to the joint MSFT.ret and GSPC.ret data using the __rmgarch::dccfit()__ function:
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+dcc.fit <- dccfit(dcc.garch11.spec, data = MSFT.GSPC.ret)
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+dcc.fit    # includes conditional correlation parameters ([Joint])
+
+# Akaike       -12.392
+# Bayes        -12.379
+
+```
+
+The sum of coefficients for MSFT.ret:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+sum(coef(dcc.fit)[3:4])  # MSFT.ret
+```
+
+0.9821 is close to 1 which makes the MSFT.ret univariate GARCH(1,1) model volatility highly persistent. The sum is close to the sum of the GARCH(1,1) model 0.9827 we created in section 1.3.
+
+The sum of coefficients for GSPC.ret:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+sum(coef(dcc.fit)[7:8])  # GSPC.ret
+```
+
+0.9845 is close to 1 which makes the GSPC.ret univariate GARCH(1,1) model volatility highly persistent. The sum is close to the sum of the GARCH(1,1) model 0.9849 we created in section 1.3.
+
+The joint/interactive sum of coefficients:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+sum(coef(dcc.fit)[9:10]) # joint
+```
+
+0.9821 is close to 1 which makes the joint DCC(1,1) model volatility highly persistent. Due to this high persistence, we quantitatively see that the two transformed datasets highly influence each other.
+
+### 1.6. Plot the estimated in-sample conditional covariances and correlations of the DCC model.
+
+Compare with the EWMA and rolling estimates.
+
+Let's plot the rolling covariance and correlation of the joint DCC(1,1) model:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# covariance and correlation series
+cov.fit <- rcov(dcc.fit)[1,2,]
+cor.fit <- rcor(dcc.fit)[1,2,]
+```
+
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+par(mfrow=c(2,1))
+plot(cov.fit, main="Joint DCC(1,1) MSFT.ret/GSPC.ret model Covariance",
+     ylab="covariance", lwd=2, type="l", col="blue")
+grid(col="gray")
+abline(h=cov(MSFT.GSPC.ret)[1,2], lwd=2, col="red")
+plot(cor.fit, main="Joint DCC(1,1) MSFT.ret/GSPC.ret model Correlation",
+     ylab="correlation", lwd=2, type="l", col="blue")
+grid(col="gray")
+abline(h=cor(MSFT.GSPC.ret)[1,2], lwd=2, col="red")
+par(mfrow=c(1,1))
+```
+The mean of the rolling covariance in the  plot above seems to be just over 0 at 0.00016. Since covariance is scale-dependent, we cannot fully determine if the spikes, while they seem small, represent strong or weak covariance without the context of the upper and lower bounds. This is similar to the 20-day rolling covariance plots we've seen in section 1.4, with the spikes coinciding with major financial events during the given time period.
+
+The rolling correlation of of the joint DCC(1,1) model also seems to be similar to the 20-day rolling correlation plot in section 1.4, with MSFT.ret leading over GSPC.ret in correlation, with an average of 0.6531.
+
+Let's create the EWMA covariance and correlation of the transformed joint MSFT.ret and GSPC.ret data:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# calculate EWMA covariances and correlations
+#
+lambda <- 0.94
+cov.ewma <- covEWMA(as.data.frame(MSFT.GSPC.ret), lambda=lambda)
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# extract conditional variance and correlation
+
+# conditional variance
+MSFT.GSPC.cond.cov <- cov.ewma[,2,1];
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# conditional correlation
+t <- length(cov.ewma[,1,1]);
+MSFT.GSPC.cond.cor<- rep(0,t);
+for (i in 1:t) {
+  MSFT.GSPC.cond.cor[i] <- cov2cor(cov.ewma[i,,])[1,2];
+}
+```
+
+The EWMA covariance and correlation plots:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# Plots
+par(mfrow=c(2,1))
+plot(x=time(as.zoo(MSFT.GSPC.ret)), y=MSFT.GSPC.cond.cov,
+     type="l", xlab="Time", ylab="Covariance", lwd=2, col="blue",
+     main="EWMA Covariance between MSFT and S&P500");
+grid(col="gray")
+abline(h=cov(MSFT.GSPC.ret)[1,2], lwd=2, col="red")
+plot(x=time(as.zoo(MSFT.GSPC.ret)), y=MSFT.GSPC.cond.cor,
+     type="l", xlab="Time", ylab="Correlation", lwd=2, col="blue",
+     main="EWMA Correlation between MSFT and S&P500");
+grid(col="gray")
+abline(h=cor(MSFT.GSPC.ret)[1,2], lwd=2, col="red")
+par(mfrow=c(1,1))
+```
+
+The EWMA plots are also very similar to both the 20-day and DCC(1,1) model covariance and correlation plots.
+
+### 1.7. Using the Estimated DCC(1,1) Model
+
+Compute (using __dccforecast()__ function) and plot the first 100 $h$-step ahead forecasts of conditional covariance and correlation.
+
+Computing forecasts with __dccforecast()__:
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+dcc.fcst <- dccforecast(dcc.fit, n.ahead=100)
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# show forecasts
+cv <- rcov(dcc.fcst)[[1]][1,2,]
+covVals = c(cov.fit,cv)
+plot.ts(covVals);grid(col="gray");abline(v=(length(covVals) - 100), col="red");
+title(main = "Covariance Forecast: Joint MSFT.ret, GSPC.net DCC(1,1) model")
+```
+
+The forecast of the joint MSFT.ret and GSPC.ret covariance is indicated by the right side fo the red vertical line. The forecast seems to trend downward towards the mean of almost 0 but not completely, showing the MSFT.ret data having less of an influence over GSPC.ret over the 100-day forecast period. This a slow reversion to the mean during the time period, indicated by the high persistence calculated by the sum of the model coefficients. Given the current climate of a rocky stock market, inflation, a post-pandemic era, and the war in Ukraine we are currently in a volatile time as shown towards the end of the data right before the forecast. That being said, as covariance is scale dependent and despite these small values, we cannot fully determine how much of an influence MSFT.ret has over GSPC.ret without the proper context of upper and lower bounds.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+cr <- rcor(dcc.fcst)[[1]][1,2,]
+corVals = c(cor.fit,cr)
+plot.ts(corVals);grid(col="gray");abline(v=(length(corVals) - 100), col="red");
+title(main = "Correlation Forecast: Joint MSFT.ret, GSPC.net DCC(1,1) model")
+```
+
+The forecast of the joint MSFT.ret and GSPC.ret correlation is indicated by the right side fo the red vertical line. Similar to the covariance forecast above, we're also seeing a downward trend where the MSFT.ret data would have an average influence of about 65% over the GSPC.ret data in terms of correlation. The reversion looks to be slow over the 100-day forecast period, indicated by the high persistence calculated from the sum of the model coefficients.
+
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+
+##########################################
+# Part 1.7
+# forecasting conditional volatility and correlations
+#
+
+
+# many method functions - see help on DCCforecast class
+# rshape, rskew, fitted, sigma, plot, rcor, rcov, show
+
+
+```
+
+
+### 1.8. Choose which model you think is best and justify your choice.
+
+The univariate ARCH(5) models are not the best choice due to that their calculated persistence is lower compared to the other models (0.7764 for the MSFT.ret ARCH(5) model and 0.8477 for the GSPC.ret ARCH(5) model). While the GARCH(1,1) and joint normal-DCC(1,1) models all have high persistence calculated at just over 0.98, we would give the edge to the joint normal-DCC(1,1) model as the best one in that it has the lowest AIC rating (-12.392) over the univariate GARCH(1,1) models (-5.365 for the MSFT.ret GARCH(1,1) model and -6.432 for the GSPC.ret GARCH(1,1) model).
+
+## 2. Report (20 points)
+
+### Write an executive summary of your Microsoft and S&P analysis outcomes.
+
+(We will use the joint normal-DCC(1,1) model and its forecasts for the executive summary.)
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# show forecasts
+cv <- rcov(dcc.fcst)[[1]][1,2,]
+covVals = c(cov.fit,cv)
+plot.ts(covVals);grid(col="gray");abline(v=(length(covVals) - 100), col="red");
+title(main = "Covariance Forecast: Joint MSFT.ret, GSPC.net DCC(1,1) model")
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+cr <- rcor(dcc.fcst)[[1]][1,2,]
+corVals = c(cor.fit,cr)
+plot.ts(corVals);grid(col="gray");abline(v=(length(corVals) - 100), col="red");
+title(main = "Correlation Forecast: Joint MSFT.ret, GSPC.net DCC(1,1) model")
+```
+
+This forecast models attempts to predict how much of an influence Microsoft stock returns have over the S&P 500 Index returns. We look at the influence in terms of variance (or volatility) and correlation. Our forecast covers a 100-day period and is based on Microsoft stock and S&P 500 Index data retrieved from Yahoo! Finance from 2000-01-03 to 2022-10-31. From the plots above, the respective forecasts are shown at the right side of the vertical red line. 
+
+The average variance calculated is almost 0, which means on average Microsoft stock returns usually does not influence S&P 500 returns during times of non-volatility. That being said, we do see spikes of volatility where Microsoft returns can influence S&P 500 returns during major financial events, such as the .com tech loss of the early 2000s, the housing market crash in 2008, the start of the COVID-19 pandemic in March of 2020, and the current time of this writing dealing with inflation, stock market instability, a post-pandemic era, and the war in Ukraine. The 100-day forecast shows a downward trend towards the 0 mean but not a fast reversion as the model is found to have high persistence.
+
+The average correlation calculated is about 65% which means Microsoft stock returns have a fairly strong influence over S&P 500 returns in terms of correlation, and at the time of this writing seem to have a stronger than average correlation due to the volatile times we are currently in that have an impact in the financial market. That being said, the 100-day forecast has a somewhat slow downward trend towards the average correlation between the two assets.
+
+Our takes from the plots and forecasts above show how influential Microsoft returns have over S&P 500 returns, especially during times of volatility which can have a major impact on the financial market. Given that Microsoft is currently the second-highest-weighted stock in the S&P 500 at about 6%, major fluctuations to Microsoft shares will impact the S&P 500. Our forecast attempts to show how much of an impact in terms of returns. That being said, our forecasts do not anticipate any future major events happening such that they slowly revert back towards the respective means in variance and correlation.
+
+We will update this model as we collect more financial data over time and as the market changes, as well as continue to improve it as our domain expands.
+

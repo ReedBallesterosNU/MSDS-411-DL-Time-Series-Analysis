@@ -1,0 +1,965 @@
+---
+output:
+  pdf_document: default
+  html_document: default
+---
+
+
+\begin{titlepage}
+   \begin{center}
+       \vspace*{1cm}
+
+       \LARGE
+       \textbf{Time Series 413, Assignment 4}
+
+       \vspace{0.5cm}
+
+       \Large
+       \textbf{ARMA Models with Seasonality (TS4)}
+
+       \vspace{1.5cm}
+
+       \vfill
+
+       \Large
+       \textbf{Reed Ballesteros}
+
+       \vspace{0.8cm}
+       
+       \normalsize
+       Northwestern University SPS, Fall 2022\\
+       MSDS-413-DL\\
+       Instructor: Dr. Jamie D. Riggs, Ph.D\\
+       2022-10-17
+
+   \end{center}
+\end{titlepage}
+
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ggplot2)
+library(TSA)
+library(forecast)
+library(fpp3)
+source('BusCycle.R')
+source('parameterTest.R')
+source('My_Tests.R')
+```
+
+
+```{r include=FALSE, warning=FALSE, message=FALSE}
+#url <- "https://www.ncdc.noaa.gov/cag/global/time-series/globe/land_ocean/1/11/1880-2020/data.csv"
+#fn <- "data.csv"
+#download.file(url, fn)
+
+X <- read.csv("data.csv",header=T,skip=4)
+# convert years into decades
+X <- X[X$Year<2020,]
+X$decade <- rep(1:trunc(nrow(X)/10),each=10)
+
+# transform Value into time series
+xValue <- ts(X$Value)
+
+
+maxLags <- 20
+```
+
+
+
+The following list defines the data sets and their respective variables.
+
+__Global Land and Ocean Temperature Anomalies, November:__
+
+https://www.ncdc.noaa.gov/cag/global/time-series/globe/land_ocean/1/11/1880-2020/data.csv
+
+* Units in Degrees Celsius
+* Base Period is 1901-2000
+* Missing data indicator is -999
+* Decades by year of global land and ocean temperature anomalies.
+  + Year beginning with 1880 and ending with year 2020
+  + Value: Average annual temperatures deviation from base period in degrees Celsius
+
+Your objective is to explore the time series behavior of these data sets including EDA, modeling, model diagnostics, and interpretation.
+
+
+## 1. EDA: Global Land and Ocean Temperature Anomalies (20 points)
+
+Conduct a complete EDA on the global land and ocean temperature anomalies.
+
+Let us create a general plot of the data:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggplot() + geom_point(data = X, aes(x = Year, y = Value)) + 
+	stat_smooth(aes(x = X$Year, y = X$Value), colour="red") +
+	theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+We see a general upward tend in the data.
+
+Validate data as a time series:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+length(unique(X$Year))
+length(X$Year)
+```
+We have 140 unique years in 140 observations, which meets the  $H_{10}: x_{it}, \; i \in \{1,2\}, \; t \in \{1,2,...,n\}$ requirement for time series validation.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+dif <- diff(as.Date(X$Year))
+nrow(X)
+table(dif)
+```
+From the test above, we can verify that the constant time span between each date is only one year, denoted by the single value 1. This meets the $H_{20}: (t+1) - t = c, t \in \{1,2...,n\}$ requirement for time series validation. 
+
+Plot:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# EDA: raw value data
+plot(xValue) # looks like non-constant variance, mean != 0
+```
+
+The plot of the time series data shows non-constant variance with mean!=0, especially with how it has an upwards trend.
+
+Histogram:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+hist(xValue) # signs of right skew
+```
+
+We see the distribution of the data has right-skewed.
+
+Q-Q Plot:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+qqnorm(xValue) # signs of skew/kurt
+qqline(xValue)
+```
+
+While most of the data lies on the ideal normal line, a large portion on the right end tends to veer from the line, demonstrating skewness and kurtosis, and not ideally normal in respect to a Gaussian PDF. 
+
+Stationarity:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggAcf(xValue) # non-stationary
+```
+
+We can see with how the time series data stands, it is not stationary.
+
+EACF:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+eacf(xValue) # ARMA(3,1)?
+```
+
+From the plot above we find it difficult to determine p and q values for ARMA(p,q), as it is not in an ideal shape to easily interpret what is the best p and q values to use for a model.
+
+T-Test for Mean 0:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myttest(xValue) # mean NOT zero, linear trend present
+```
+
+The 95% Confidence Interval (CI) does not include 0 (but just barely!), therefore the mean of Value is not statistically 0, therefore a linear trend is present in the data.
+
+Skewness:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myskewtest(xValue) # slghtly skew
+```
+
+Right skewness of the time series data show the time series data is not normal to a Gaussian PDF.
+
+(excess) Kurtosis:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mykurttest(xValue) # kurt - flat
+```
+
+Flat Kurtosis of the time series data show the time series data is not normal to a Gaussian PDF.
+
+Constant Variance:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mybptest(xValue) # constant variance, homoscedastic
+```
+
+The Breucsh-Pagan test show that the time series data has constant variance.
+
+Lag independence:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myboxljungtest(xValue,lags=maxLags) # lag dependency, autocorrelation
+```
+
+he test above show that there is lag dependency within the time series data.
+
+Given the tests results above, especially with the t-test not having mean 0, a linear trend is present. Let us transform the data with the 1st difference (diff(Value)) to see if we can remove the linear trend.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# EDA: transformation diff(xValue)
+dValue <- diff(xValue, differences=1)
+dValue <- ts(dValue)
+```
+
+diff(Value) plot:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+plot(dValue) # looks like constant variance
+```
+
+We observe the plot of diff(Value) to have constant variance and mean zero, and also mean that the linear slope is removed.
+
+diff(Value) normalcy: histogram
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+hist(dValue) # looks slightly right skew
+```
+
+We observe right skewness and flat (excess) Kurtosis in the distribution histogram.
+
+diff(Value) normalcy: Q-Q Plot
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+qqnorm(dValue) # signs of skew/kurt
+qqline(dValue)
+```
+
+We see slight skewness and kurtosis at the ends of the the Q-Q plot, indicating diff(Value) time series data is not normal in respect to a Gaussian PDF.
+
+ACF plot: diff(Value)
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggAcf(dValue) # q = 1
+```
+
+The ACF plot above shows us to choose q=1 in our ARMA() model.
+
+PACF Plot: diff(Value):
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggPacf(dValue) # p = 3
+```
+
+The PACF plot above shows us to choose p=1 in our ARMA() model.
+
+diff(Value) t-test for mean 0:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myttest(dValue) # mean = 0 - linear trend removed
+```
+
+The 95% CI of the t-test interval contains 0, therefore the mean of diff(Value) is statistically 0, and that the linear trend is removed.
+
+diff(Value) normalcy: skewness
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myskewtest(dValue) # slightly right skew
+```
+
+We observe right skewness, indicating diff(Value) time series data is not normal in respect to a Gaussian PDF.
+
+diff(Value) normalcy: (excess) Kurtosis
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mykurttest(dValue) # kurt somewhat flat
+```
+
+We observe flat (excess) Kurtosis, indicating diff(Value) time series data is not normal in respect to a Gaussian PDF.
+
+diff(Value) constant variance: Breusch-Pagan test
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mybptest(dValue) # constant variance, homoscedastic
+```
+
+We observe constant variance in the diff(Value) time series data.
+
+diff(Value) lag independence: Box-Ljung test
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myboxljungtest(dValue) # lag dependency, autocorrelation
+```
+
+The Box-Ljung test indicates lag dependence within the diff(Value) time series data.
+
+
+## 2. Seasonal Autoregressive Moving Average (SARMA) Models (20 points)
+
+Based on the EDA from part 1, construct a SARMA model for the global land and ocean temperature anomalies as follows.
+
+2.1. Your EDA should have identified a trend. Justify that this trend has been removed.
+
+Our EDA had a plot of the time series data with the following:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# EDA: raw value data
+plot(xValue) # looks like non-constant variance, mean != 0
+```
+
+We can see an upward trend throughout the plot.
+
+Our t-test for mean zero gives us the following:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myttest(xValue) # mean NOT zero, linear trend present
+```
+
+The 95% Confidence Interval (CI) of the t-test does not contain zero, therefore the mean of the Value data is not anywhere close to zero.
+
+Because of the plot and a non-zero mean, we can confirm a linear trend in the Value data.
+
+We transform the data by taking the first difference diff(Value) and create the following plot:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+plot(dValue) # looks like constant variance
+```
+
+We can eyeball a non-linear trend in the plot by its linear flatless (and we also notice constant variance), but we'll perform a t-test for mean 0 to confirm our findings.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myttest(dValue) # mean = 0 - linear trend removed
+```
+
+The 95% CI of the t-test does contains zero, therefore the mean of the diff(Value) is statistically zero.
+
+With the linear flatnes and mean zero of diff(Value), we can confirm that the linear trend is removed in a diff(Value) transformation.
+
+2.2. Write the equation $(x_t = c + \phi_1x_{t-1} + ... + \phi_1z_t + \phi_2z_{t-1} + ... =)$ of a $ARMA(p,q)$ model then construct an $ARMA(p,q)$ model both based on your choice of d for the temperature deviation series. Perform model checking using $lag = 20$. Is the model adequate? Why?
+
+```{r include=FALSE, warning=FALSE, message=FALSE}
+y <- ts(X[,2], start=X[2,3], frequency=10)  # cycles per decade
+```
+
+```{r include=FALSE, warning=FALSE, message=FALSE}
+# set d for ARMA(p,d,q)
+d <- 1
+# set D for SARMA(P, D, Q)
+D <- 0
+
+yTrans <- diff(y,lag=1,differences=d)
+```
+
+The ACF plot for diff(Value) is the following:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggAcf(yTrans, lag.max=maxLags) # q = 1
+```
+
+The plot implies a 1st order Moving-Average model, or MA(1).
+
+The PACF plot for diff(Value) is the following:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggPacf(yTrans, lag.max=maxLags) # p = 3
+```
+
+The plot implies a 3rd order Moving-Average model, or AR(3).
+
+Combined, we have an ARMA(3,1) model with the following summary:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+p <- 3
+q <- 1
+pdq <- c(p,d,q)
+m <- Arima(yTrans,order=pdq,include.mean=T)
+rm <- resid(m)
+summary(m)
+```
+
+Given the coefficients above, we have the following ARMA(3,1) equation:
+
+$$
+x_t = -0.613x_{1} -0.4320x_{2} -0.2398x_{3} -z_{1}
+$$
+
+Check residuals for ARMA(3,1):
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# Check residuals
+checkresiduals(m,lags=maxLags)
+```
+The residuals plot looks like it have constant variance with mean 0. The ACF plot looks stationary with only one lag exceeding the 95% CI threshold. The distribution of residuals look to have some skew and a relatively flat kurtosis, implying it might not be normal in respect to a Gaussian PDF.
+
+ARMA(3,1) T-Test for mean 0:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# check mean 0
+myttest(rm) # mean 0
+```
+
+The t-test 95% CI contains zero, therefore the mean of the residuals is statistically zero, and that the linear trend has been removed.
+
+ARMA(3,1) normality: skewness
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# check normal: skew
+myskewtest(rm) # right
+```
+
+ARMA(3,1) shows some slight right skewness, therefore not normal in respect to a Gaussian PDF.
+
+ARMA(3,1) normality: (excess) Kurtosis
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# check normal: kurt
+mykurttest(rm) # flat
+```
+
+ARMA(3,1) shows some slight flat (excess) Kurtosis, therefore not normal in respect to a Gaussian PDF.
+
+ARMA(3,1) stationarity: KPSS
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# stationarity: kpss
+mykpsstest(rm) # stationary
+```
+The ARMA(3,1) KPSS test shows no unit roots, therefore the model residuals are stationary.  
+
+ARMA(3,1) stationarity: ADF
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# stationarity: adf
+myadftest(rm,lags=maxLags) # not stationary
+```
+
+Contrary to the KPSS test, the ADF test shows the ARMA(3,1) model residuals are not stationary, with the p-value just greater than the 0.05 critical value. Given the ACF plot:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggAcf(rm)
+```
+
+We can visually see the residuals look fairly stationary. The ADF test could be taking slight mean drift into account. But since two of three indicators of stationarity, the KPSS test and the ACF plot, show the residuals are stationary, we will go with the narrative that the model residuals are stationary overall.
+
+ARMA(3,1) constant variance: McLeod-Li
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# constant variance: mcleod-li
+mymcleodlitest(m) # constant variance
+```
+
+While the residuals plot showed signs of constant variance within the ARMA(3,1) model residuals, the McLeod-Li further supports it.
+
+ARMA(3,1) constant variance: Breush-Pagan
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# constant variance: Breusch-Pagan
+mybptest(rm) # consant variance
+```
+
+The Breusch-Pagan test further supports constant variance within the ARMA(3,1) model residuals.
+
+ARMA(3,1) lag dependence: Box-Ljung
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# lag independence: Box-Ljung
+myboxljungtest(rm,lags=maxLags)
+```
+
+The ARMA(3,1) model residuals are shown to have lag independence via the Box-Ljung test.
+
+ARMA(3,1) business cycles:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+#test for business cycles
+pp <- c(1,-m$coef)
+ss <- polyroot(pp)
+unique(round(sapply(all_complex(ss),period),digits=3))
+```
+
+We find that the ARMA(3,1) model residuals show two business cycles, a 6-year and 3-year cycles.
+
+Given that the model is not normal, contains two business cycles, and mostly stationary, I feel this is still an adequate model to be used for forecasting.
+
+2.3. Fit a seasonal model for the temperature series using the command (d from your EDA):  
+
+$ms <- arima(y,\;order=c(0,0,0),\;seasonal=list(order=c(1,d,1)),\;include.mean=F)$
+
+Perform model checking including using lag=20 and adjust P and Q to improve the model if needed. Is the seasonal model adequate? Why?
+
+Given we are taking the first difference of Value, or diff(Value), we will set d = 1.
+
+Here is our SARMA(1,1,1) model:
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+# d <- 1
+m2 <- Arima(yTrans, order=c(0,0,0), seasonal=list(order=c(1,d,1)), include.mean=F)
+summary(m2)
+```
+
+SARMA(1,1,1) check residuals:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# Check residuals
+rm2 <- resid(m2)
+checkresiduals(m2)
+```
+
+The residuals plot looks like it have constant variance with mean 0. The ACF plot looks fairly stationary with three lags exceeding the 95% CI threshold. The distribution of residuals look to have some skew and a relatively flat kurtosis, implying it might not be normal in respect to a Gaussian PDF.
+
+SARMA(1,1,1) t-test for mean 0:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# check mean 0
+myttest(rm2) # mean = 0
+```
+
+The t-test 95% CI contains zero, therefore the mean of the residuals is statistically zero, and that the linear trend has been removed.
+
+SARMA(1,1,1) normality: skewness
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# check normal: skew
+myskewtest(rm2) # right
+```
+
+SARMA(1,1,1) shows some slight right skewness, therefore not normal in respect to a Gaussian PDF.
+
+SARMA(1,1,1) normality: (excess) Kurtosis
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# check normal: kurt
+mykurttest(rm2) # tall
+```
+
+SARMA(1,1,1) shows some slight tall (excess) Kurtosis, therefore not normal in respect to a Gaussian PDF.
+
+SARMA(1,1,1) stationarity: KPSS
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# stationarity: kpss
+mykpsstest(rm2) # stationary
+```
+
+The SARMA(1,1,1) KPSS test shows no unit roots, therefore the model residuals are stationary.  
+
+SARMA(1,1,1) stationarity: ADF
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# stationarity: adf
+myadftest(rm2,lags=maxLags) # stationary
+```
+
+The ADF test for SARMA(1,1,1) also support that its model residuals are stationary.
+
+SARMA(1,1,1) constant variance: McLeod-Li
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# constant variance: mcleod-li
+mymcleodlitest(m2) # constant variance
+```
+
+While the residuals plot showed signs of constant variance within the SARMA(1,1,1) model residuals, the McLeod-Li further supports it.
+
+SARMA(1,1,1) constant variance: Breush-Pagan
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# constant variance: Breusch-Pagan
+mybptest(rm2) # constant variance
+```
+
+The Breusch-Pagan test further supports constant variance within the SARMA(1,1,1) model residuals.
+
+SARMA(1,1,1) lag dependence: Box-Ljung
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# lag independence: Box-Ljung
+myboxljungtest(rm2,lags=maxLags) # lag dependency
+```
+
+The SARMA(1,1,1) model residuals are shown to have lag dependence via the Box-Ljung test.
+
+Checking for SARMA(1,1,1) business cycles:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+#test for business cycles
+pp2 <- c(1,-m2$coef)
+ss2 <- polyroot(pp2)
+unique(round(sapply(all_complex(ss2),period),digits=3)) # only one cycle (4 years?)
+```
+We find that the SARMA(1,1,1) model show a 4-year business cycle.
+
+Given that the model and its residuals are not normal, contains a business cycle, and lag dependency, I feel this is still an adequate model to be used for forecasting.
+
+We will attempt to see if Auto Arima function can result in an improved SARMA() model:
+
+```{r include=TRUE, warning=FALSE, message=FALSE}
+maa <- auto.arima(yTrans, max.p=0, max.q=0, max.d=0, max.D=1, stationary=F, seasonal=T)
+summary(maa)
+```
+
+Auto Arima results in a white noise ARMA(0,0) model with zero mean, and will not continue model diagnostics on it.
+
+2.4. Based on in-sample fitting, which model is preferred? Why?
+
+Compare AIC/BIC/RMSE/MAE between ARMA(3,1) and SARMA(1,1,1):
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+summary(m)
+summary(m2)
+```
+
+AIC/BIC/RMSE/MAE comparisons seem to favor ARMA(3,1) over SARMA(3,1,1), as ARMA(3,1) has lower values, indicating better performance.
+
+2.5. Consider out-of-sample predictions. Use $t = 100$ as the starting forecast origin. Which
+model is preferred based on the out-of-sample predictions?
+
+4-year Forecasting: ARMA(3,1) vs SARMA(3,1,1)
+
+ARMA(3,1):
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+fm <- Arima(y,order=pdq,include.mean=T)
+f <- forecast::forecast(fm,h=4)
+autoplot(f) +
+	ggtitle("Global Land & Ocean Temp. Anomalies: 4-yr Forecast ARMA(3,1)") +
+  geom_vline(xintercept = X$decade[length(resid(m))]+1, col="red") +
+	xlab("Decade Index (from 1880)") + ylab("Average Annual Temperatures Deviation (C)")
+```
+
+The ARMA(3,1) forecast shows a fairly constant point forecast with a slight dip, indicated by the dark blue line. The forecast fails to demonstrate seasonality that the time series shows. That being said, the range of the 80% CI shown by the blue area and the 95% CI shown by the lighter blue are not too wide. 
+
+SARMA(1,1,1):
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+fm2 <- Arima(y,order=c(0,0,0),seasonal=list(order=c(1,d,1)),include.mean=T)
+f2 <- forecast::forecast(fm2,h=4)
+autoplot(f2) +
+	ggtitle("Global Land & Ocean Temp. Anomalies: 4-yr Forecast SARMA(1,1,1)") +
+  geom_vline(xintercept = X$decade[length(resid(m))]+1, col="red") +
+	xlab("Decade Index (from 1880)") + ylab("Average Annual Temperatures Deviation (C)")
+```
+
+The ARMA(3,1) forecast attempts to demonstrate some of the seasonality shown by the time series, indicated by the dark blue line. That being said, the range of the 80% CI shown by the blue area and the 95% CI shown by the lighter blue is fairly larger than the ARMA(3,1) model.
+
+
+
+## 3. ARMA X SARMA Models (20 points)
+
+Continuing with the global land and ocean temperature anomalies data, construct an ARMA X SARMA model as follows:
+
+3.1. Fit a seasonal model for the temperature series based the ACF and PACF and your choice of d using the command: 
+
+$ms <- Arima(y,\;order=c(p,d,q),\;seasonal=list(order=c(1,0,1)),\;include.mean=F)$ 
+
+Perform model checking including using $lag=20$ and adjust $p$, $q$, $P$, and $Q$ to improve the model if needed. Is the seasonal model adequate? Why?
+
+Given we are taking the first difference of Value, or diff(Value), we will set d = 1, and D = 0 for the seasonal component.
+
+Here is our ARMA(3,1)xSARMA(1,0,1) model:
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+# p <- 3
+# d <- 1
+# q <- 1
+# D <- 0
+m3 <- Arima(yTrans, order=pdq, seasonal=list(order=c(1,D,1)), include.mean=F)
+summary(m3)
+```
+
+ARMA(3,1)xSARMA(1,0,1) check residuals:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# Check residuals
+rm3 <- resid(m3)
+checkresiduals(m3)
+```
+
+The residuals plot looks like it have constant variance with mean 0. The ACF plot shows only one lag exceeding the 95% CI threshold. The distribution of residuals look to have some skew and a relatively flat kurtosis, implying it might not be normal in respect to a Gaussian PDF.
+
+ARMA(3,1)xSARMA(1,0,1) t-test for mean 0:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# check mean 0
+myttest(rm3) # mean = 0
+```
+
+The t-test 95% CI contains zero, therefore the mean of the residuals is statistically zero, and that the linear trend has been removed.
+
+ARMA(3,1)xSARMA(1,0,1) normality: skewness
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# check normal: skew
+myskewtest(rm3) # right
+```
+
+ARMA(3,1)xSARMA(1,0,1) shows some slight right skewness, therefore not normal in respect to a Gaussian PDF.
+
+ARMA(3,1)xSARMA(1,0,1) normality: (excess) Kurtosis
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# check normal: kurt
+mykurttest(rm3) # flat
+```
+
+ARMA(3,1)xSARMA(1,0,1) shows some slight flat (excess) Kurtosis, therefore not normal in respect to a Gaussian PDF.
+
+ARMA(3,1)xSARMA(1,0,1) stationarity: KPSS
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# stationarity: kpss
+mykpsstest(rm3) # stationary
+```
+
+ARMA(3,1)xThe SARMA(1,1,1) KPSS test shows no unit roots, therefore the model residuals are stationary.  
+
+ARMA(3,1)xSARMA(1,0,1) stationarity: ADF
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# stationarity: adf
+myadftest(rm3,lags=maxLags) # stationary
+```
+
+Contrary to the KPSS test, and like we've seen with testing stationary in the ARMA(3,1) model, the ADF test shows the ARMA(3,1)xSARMA(1,0,1) model residuals are not stationary, with the p-value greater than the 0.05 critical value. Given the ACF plot:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggAcf(rm3)
+```
+
+We can visually see the residuals look fairly stationary. The ADF test could be taking slight mean drift into account. But since two of three indicators of stationarity, the KPSS test and the ACF plot, show the residuals are stationary, we will go with the narrative that the model residuals are stationary overall.
+
+ARMA(3,1)xSARMA(1,0,1) constant variance: McLeod-Li
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# constant variance: mcleod-li
+mymcleodlitest(m3) # constant variance
+```
+
+While the residuals plot showed signs of constant variance within the ARMA(3,1)xSARMA(1,0,1) model residuals, the McLeod-Li further supports it.
+
+ARMA(3,1)xSARMA(1,0,1) constant variance: Breush-Pagan
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# constant variance: Breusch-Pagan
+mybptest(rm3) # constant variance
+```
+
+The Breusch-Pagan test further supports constant variance within the ARMA(3,1)xSARMA(1,0,1) model residuals.
+
+ARMA(3,1)xSARMA(1,0,1) lag dependence: Box-Ljung
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# lag independence: Box-Ljung
+myboxljungtest(rm3,lags=maxLags) # independent
+```
+
+The ARMA(3,1)xSARMA(1,0,1) model residuals are shown to have lag independence via the Box-Ljung test.
+
+Checking for ARMA(3,1)xSARMA(1,0,1) business cycles:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+#test for business cycles
+pp3<- c(1,-m3$coef)
+ss3 <- polyroot(pp3)
+unique(round(sapply(all_complex(ss3),period),digits=3)) # 4 business cycles
+```
+We find that the ARMA(3,1)xSARMA(1,0,1) model show 8-year, 2.5-year, and 4.5-year business cycles.
+
+Given that the model and its residuals are not normal, contains 3 business cycles, I feel this is an adequate model to be used for forecasting.
+
+We will attempt to see if Auto Arima function can result in an improved ARMA()xSARMA() model:
+
+```{r include=TRUE, warning=FALSE, message=FALSE}
+m2aa <- auto.arima(yTrans, max.p=20,max.d=20, max.q=20, max.P=20, max.D=20, max.Q=20, stationary=F, seasonal=T)
+summary(m2aa)
+```
+
+Auto Arima only results in an MA(1) model with no seasonal component.
+
+Let's create a ARMA(1,1)xSARMA(1,0,1) model with a slightly smaller value of p than ARMA(3,1)xSARMA(1,0,1):
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+m4 <- Arima(yTrans, order=c(1,1,1), seasonal=list(order=c(1,D,1)), include.mean=F)
+summary(m4)
+```
+
+ARMA(3,1)xSARMA(1,0,1) summary:
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+summary(m3)
+```
+
+Based on the model summaries above, ARMA(3,1)xSARMA(1,0,1) has better AIC, BIC, RMSE, and MAE than the ARMA(1,1)xSARMA(1,0,1) model we just created. I would prefer the ARMA(3,1)xSARMA(1,0,1) model due to these better statistics.
+
+3.2. Based on in-sample fitting, which model is preferred? Why?
+
+We will perform in-sample testing for ARMA(1,1)xSARMA(1,0,1).
+
+ARMA(1,1)xSARMA(1,0,1) check residuals:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# Check residuals
+rm4 <- resid(m4)
+checkresiduals(m4)
+```
+The residuals plot looks like it have constant variance with mean 0. The ACF plot is fairly stationary with only two lags exceeding the 95% CI threshold. The distribution of residuals look to have some skew and a relatively flat kurtosis, implying it might not be normal in respect to a Gaussian PDF.
+
+ARMA(1,1)xSARMA(1,0,1) t-test for mean 0:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# check mean 0
+myttest(rm4) # mean = 0
+```
+
+The t-test 95% CI contains zero, therefore the mean of the residuals is statistically zero, and that the linear trend has been removed.
+
+ARMA(1,1)xSARMA(1,0,1) normality: skewness
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# check normal: skew
+myskewtest(rm4) # right
+```
+
+ARMA(1,1)xSARMA(1,0,1) shows some slight right skewness, therefore not normal in respect to a Gaussian PDF.
+
+ARMA(1,1)xSARMA(1,0,1) normality: (excess) Kurtosis
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# check normal: kurt
+mykurttest(rm4) # flat
+```
+
+ARMA(1,1)xSARMA(1,0,1) shows some slight flat (excess) Kurtosis, therefore not normal in respect to a Gaussian PDF.
+
+ARMA(1,1)xSARMA(1,0,1) stationarity: KPSS
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# stationarity: kpss
+mykpsstest(rm4) # stationary
+```
+
+ARMA(1,1)xThe SARMA(1,1,1) KPSS test shows no unit roots, therefore the model residuals are stationary.  
+
+ARMA(1,1)xSARMA(1,0,1) stationarity: ADF
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# stationarity: adf
+myadftest(rm4,lags=maxLags) # stationary
+```
+
+The the ARMA(3,1)xSARMA(1,0,1) model, the ADF test for ARMA(1,1)xSARMA(1,0,1) shows 
+
+ARMA(1,1)xSARMA(1,0,1) constant variance: McLeod-Li
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# constant variance: mcleod-li
+mymcleodlitest(m4) # constant variance
+```
+
+While the residuals plot showed signs of constant variance within the ARMA(1,1)xSARMA(1,0,1) model residuals, the McLeod-Li further supports it.
+
+ARMA(1,1)xSARMA(1,0,1) constant variance: Breush-Pagan
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# constant variance: Breusch-Pagan
+mybptest(rm4) # constant variance
+```
+
+The Breusch-Pagan test further supports constant variance within the ARMA(1,1)xSARMA(1,0,1) model residuals.
+
+ARMA(1,1)xSARMA(1,0,1) lag dependence: Box-Ljung
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# lag independence: Box-Ljung
+myboxljungtest(rm4,lags=maxLags) # independent
+```
+
+The ARMA(1,1)xSARMA(1,0,1) model residuals are shown to have lag dependence via the Box-Ljung test.
+
+Checking for ARMA(1,1)xSARMA(1,0,1) business cycles:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+#test for business cycles
+pp4<- c(1,-m4$coef)
+ss4 <- polyroot(pp4)
+unique(round(sapply(all_complex(ss4),period),digits=3)) # 4 business cycles
+```
+
+We find that the ARMA(1,1)xSARMA(1,0,1) model show a 4-year business cycle.
+
+From the in-sample tests above, the ARMA(1,1)xSARMA(1,0,1) model compromised such that it is not fully normal, has lag dependence, and 1 business cycle. 
+
+The ARMA(3,1)xSARMA(1,0,1) model and its residuals are not normal and contains 3 business cycles. Despite the 3 business cycles, I would prefer the ARMA(3,1)xSARMA(1,0,1) model more.
+
+
+
+3.4. Compare your SARMA model with your ARMA X SARMA model using the model diagnostics and choose which is better.
+
+SARMA(1,1,1):
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+checkresiduals(m2)
+```
+
+With the the in-sample model diagnostics performed in section 2.3, we found the SARMA(1,1,1) model is compromised by non-normalcy from skew and (excess) Kurtosis, lag dependency from the Box-Ljung test, and contains a 4-year business cycle.
+
+
+ARMA(3,1)xSARMA(1,0,1):
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+checkresiduals(m3)
+```
+
+With the in-sample model diagnostics performed in section 3.1, we found the ARMA(3,1)xSARMA(1,0,1) model is compromised by non-normalcy from skew and (excess) Kurtosis, and contains three business cycle, and its conflicting ADF test questioning its overall stationarity.
+
+Based on these in-sample model diagnostics, I would slightly favor the ARMA(3,1)xSARMA(1,0,1) as it is less compromised compared to the SARMA(1,1,1) model despite having more business cycles. We will see forecast performance in the next section (3.5).
+
+3.5. Compare your SARMA model with your ARMA X SARMA model using the model fit statistics and forecasting ability. Which is better? Do the two comparison methods agree?
+
+SARMA(1,1,1) 4-year forecast:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+fm2 <- Arima(y,order=c(0,0,0),seasonal=list(order=c(1,d,1)),include.mean=T)
+f2 <- forecast::forecast(fm2,h=4)
+autoplot(f2) +
+	ggtitle("Global Land & Ocean Temp. Anomalies: 4-yr Forecast SARMA(1,1,1)") +
+  geom_vline(xintercept = X$decade[length(resid(m))]+1, col="red") +
+	xlab("Decade Index (from 1880)") + ylab("Average Annual Temperatures Deviation (C)")
+```
+
+ARMA(3,1)xSARMA(1,0,1) 4-year forecast:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+fm3 <- Arima(y,order=pdq,seasonal=list(order=c(1,0,1)),include.mean=T)
+f3 <- forecast::forecast(fm3,h=4)
+autoplot(f3) +
+	ggtitle("Global Land & Ocean Temp Anomalies: 4-Yr Forecast ARMA(3,1)xSARMA(1,0,1)") +
+  geom_vline(xintercept = X$decade[length(resid(m))]+1, col="red") +
+	xlab("Decade Index (from 1880)") + ylab("Average Annual Temperatures Deviation (C)")
+
+```
+
+While we found the ARMA(3,1)xSARMA(1,0,1) to have better overall in-sample model diagnostics in section 3.4, the SARMA(1,1,1) model seems to capture the seasonality when it comes to forecasting, but also has a larger CI range of variance in doing so. The ARMA(3,1)xSARMA(1,0,1) model does not demonstrate much seasonality, if at all. Because of that, I would give the edge to the SARMA(1,1,1) model due to its better seasonality forecast, despite the larger CI range.
+
+(NOTE: The the gap of the start of the forecast in both charts is due to the one-year gap from the last datapoint in the time series, and is not drawn to connect them.)
+
+
+
+
+## 4. Report (20 points)
+
+For the global land and ocean temperature anomalies, describe to a client or employer your best model. The report requires information from which decisions can be made or actions taken.
+
+(Based on the analysis, modelling, testing, and forecasting performed in sections 2 and 3, we will use the SARMA(1,1,1) model as noted in section 3.5 for our forecasting executive report.)
+
+SARMA(1,1,1) 4-year forecast:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+fm2 <- Arima(y,order=c(0,0,0),seasonal=list(order=c(1,d,1)),include.mean=T)
+f2 <- forecast::forecast(fm2,h=4)
+autoplot(f2) +
+	ggtitle("Global Land & Ocean Temp. Anomalies: 4-yr Forecast SARMA(1,1,1)") +
+  geom_vline(xintercept = X$decade[length(resid(m))]+1, col="red") +
+	xlab("Decade Index (from 1880)") + ylab("Average Annual Temperatures Deviation (C)")
+```
+
+This forecasting model attempts to predict global land and ocean temperature (C) changes for the next four years. The data is sourced from the National Centers for Environmental Information website which contains annual temperature changes from 1880 to 2019. The forecast presented here is based from an evaluation of several working models that have been tested and compared, and selected the best one based on the tools we currently have available.
+
+The forecast model shows the dark blue point forecast line emulating the seasonal cycles shown by the previous time series data, showing drops and even greater climbs of temperature changes over the next four years. In addition to the point forecast line we also have an 80% confidence interval (CI) shown by the blue area of possible values that could occur, as well as a 95% CI expanded in the lighter blue area. The range of these CIs also follow the seasonal changes like that of the point forecast line, as opposed to generalizing an overall area. 
+
+Given the current tools and methodologies we have at our disposal we are limiting ourselves by making short-term recommendations with this forecast model at this time. With this short-term perspective and the range of the 80% CI we can anticipate a change of as low as 0.3 degrees Celsius to as high as 1.1 degrees Celsius. While the range might be rather large, it somewhat supports the greater theme of rising temperatures as a result of climate change. That said, we consider four years could be enough time, if planned well and efficiently, to be aware of, anticipate, and implement climate change-related policies that can effect the day-to-day business and make changes as needed. But we should not only accommodate those policies, and if possible, take steps to put things in place for longer-term planning as well to help curb climate change and find ways to reduce our carbon footprint in respect to the business.
+
+We will keep improving upon this model by iteration as our toolsets expand over time to provide a more accurate and long-term forecast.
+
+

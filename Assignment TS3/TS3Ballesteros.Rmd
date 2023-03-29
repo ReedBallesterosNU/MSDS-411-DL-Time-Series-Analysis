@@ -1,0 +1,749 @@
+---
+output:
+  pdf_document: default
+  html_document: default
+---
+
+
+\begin{titlepage}
+   \begin{center}
+       \vspace*{1cm}
+
+       \LARGE
+       \textbf{NU Time Series 413, Assignment 3}
+
+       \vspace{0.5cm}
+
+       \Large
+       \textbf{ARMA Models (TS3)}
+
+       \vspace{1.5cm}
+
+       \vfill
+
+       \Large
+       \textbf{Reed Ballesteros}
+
+       \vspace{0.8cm}
+       
+       \normalsize
+       Northwestern University SPS, Fall 2022\\
+       MSDS-413-DL\\
+       Instructor: Dr. Jamie D. Riggs, Ph.D\\
+       2022-10-10
+
+   \end{center}
+\end{titlepage}
+
+```{r setup, include=FALSE, echo=FALSE, warning=FALSE, message=FALSE}
+# setup and load libraries
+knitr::opts_chunk$set(echo = TRUE)
+library(ggplot2)
+library(DescTools)
+library(lmtest)
+library(ggplot2)
+library(fBasics)
+library(fpp3)
+library(forecast)
+library(urca)
+library(fUnitRoots)
+library(TSA)
+source('BusCycle.R')
+source('parameterTest.R')
+source('My_Tests.R')
+```
+
+```{r include=FALSE, warning=FALSE, message=FALSE}
+var.CI = function(data, conf.level = 0.95) {
+	df = length(data) - 1
+	chilower = qchisq((1 - conf.level)/2, df)
+	chiupper = qchisq((1 - conf.level)/2, df, lower.tail = FALSE)
+	v = var(data)
+	x <- c(df * v/chiupper, v, df * v/chilower)
+	names(x) <- c("lower.ci", "variance", "upper.ci")
+	return(x)
+	}
+```
+
+## 1. EDA (20 points)
+
+Consider the data set of daily total number of Covid-19 cases confirmed after positive test. The data file is __https://covid.ourworldindata.org/data/owid-covid-data.csv__ with column names $date$, $iso\_code$, $total\_cases$, and $population$. Use the columns $date$ and $total\_cases$. Use your EDA from Assignment 1 to obtain and justify a stationary total cases time series. You may need to log-transform or first difference or both.
+
+```{r include=FALSE, warning=FALSE, message=FALSE}
+#url <- "https://covid.ourworldindata.org/data/owid-covid-data.csv"
+#fn <- "Covid19.csv"
+#download.file(url, fn)
+
+# load the Covid dataset from the url
+Covid19 <- read.csv("Covid19.csv",header=T)
+
+# filter to iso_code="USA" and only columns date and total_cases
+X <- Covid19[Covid19$iso_code=="USA",]
+X <- na.omit(X[,c("date","total_cases")])
+X$date <- as.Date(X$date)
+summary(X);nrow(X)
+```
+
+Validate data as a time series:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+length(unique(X$date))
+length(X$date)
+```
+As seen in Assignment 1, we have 987 unique dates in 987 observations, which meets the  $H_{10}: x_{it}, \; i \in \{1,2\}, \; t \in \{1,2,...,n\}$ requirement for time series validation.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+dif <- diff(as.Date(X$date,"%Y-%m-%d"))
+nrow(X)
+table(dif)
+```
+From the test above, we can verify that the constant time span between each date is only one day, denoted by the single value 1. This meets the $H_{20}: (t+1) - t = c, t \in \{1,2...,n\}$ requirement for time series validation. 
+
+Plotting the time series:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggplot() + geom_line(data = X, aes(x = date, y = total_cases))
+```
+From the dataset we can observe an overall upward trend in total_cases, but with some distinct trend-cycles as the growth rate of total_cases varies throughout the time period. There are steep trend-cycle rises in total_cases such as during the fall season of 2020 and the beginning of 2022. With this upward increasing trend we can also say the time series is not stationary, as the mean is increasing over time.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggplot(X, aes(x=total_cases)) + geom_histogram(aes(y=..density..), bins=30) + geom_density(alpha=0.6)
+```
+The total_cases histogram displays a trimodal plot, exhibiting non-normal distribution, thus not conforming to a Gaussian PDF.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggplot(X, aes(sample=total_cases)) +
+	stat_qq() +
+	stat_qq_line()
+```
+Much of the total_cases data in the Q-Q plot deviate from the ideal normal distribution line on opposite sides with long tails exhibiting very tall kurtosis, demonstrating non-normality and non-conformity to a Gaussian PDF.
+
+Normal test with Skewness:
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myskewtest(X$total_cases)
+```
+The total_cases data is calculated to have some right skewness, as the 95% CI does not contain zero, making the distribution not normal.
+
+Normal test with (excess) Kurtosis:
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mykurttest(X$total_cases)
+```
+The total_cases data is calculated to have highly-peaked (excess) Kurtosis, making the distribution not normal.
+
+T-Test:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myttest(X$total_cases)
+```
+We can tell from the plot the mean of the time series is not zero, and the t.test formally confirms it since the 95%CI does not contain 0, and also confirms linear trends are present.
+
+```{r include=FALSE, warning=FALSE, message=FALSE}
+# convert total_cases into a time series (TotalCases)
+TotalCases <- ts(X$total_cases)
+```
+
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggAcf(TotalCases)
+```
+The high lag spikes in the ACP plot show the total_cases data is not stationary. We can observe this from the basic time series plot as total_cases is ever-growing.
+
+Independence Box-Ljung test:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+lags <- 30
+myboxljungtest(TotalCases,lags)
+```
+We fail to reject null hypothesis of independent lags of the total_cases data, as the Box Ljung test implies dependency in the data over 30 lags.
+
+We want to transform the total_cases data in a way where the mean is closer to zero and have a more normal-like distribution. The transformation might not meet all the expectations of a Gaussian PDF, but we can attempt to try to meet some of those requirements, as well attempt to make the data more stationary.
+
+The best we are able to do to make the time series data more 'normal' is taking the difference of the square root of total_cases twice: diff(diff(sqrt(total_cases))).
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+y <- ts(diff(sqrt(X[,2]),differences=2))
+```
+
+
+Plot diff(diff(sqrt(total_cases)))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+plot(y)
+```
+We can infer from the plot of diff(diff(sqrt(total_cases))) that the mean could be close to zero and not constant variance.
+
+Histogram: diff(diff(sqrt(total_cases)))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+hist(y)
+```
+We see a more normal-like distribution of diff(diff(sqrt(total_cases))) with much less skewness before tranformation. But we also see a highly-peaked distribution, implying veryt high (excess) Kurtosis.
+
+
+Q-Q Plot: diff(diff(sqrt(total_cases)))
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+qqnorm(y)
+qqline(y)
+```
+The Q-Q plot shows most of the data on the ideal natural slope, with the ends sharply deviating away, indicating high (excess) Kurtosis.
+
+Normal test diff(diff(sqrt(total_cases))) with Skewness:
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myskewtest(y)
+```
+The skewness 95% CI does not contain zero, therefore showing signs of right skewness.
+
+Normal test diff(diff(sqrt(total_cases))) with (excess) Kurtosis:
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mykurttest(y)
+```
+The (excess) Kurtosis 95% CI does not contain zero, but large values, therefore showing signs highly peaked Kurtosis.
+
+T-Test diff(diff(sqrt(total_cases))):
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myttest(y)
+```
+As we can see from the plot of diff(diff(sqrt(total_cases))) the mean might be close to zero, and the t-test shows that the 95% CI does contain zero, thus the mean is statistically zero.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggAcf(y)
+```
+From the ACF plot above we can notice a 7-lag cycle counting from the highly-positive peaks. While lags 3,4, and 8 are near statistically 0, lag 10 is the first lag to show a statistically 0 dropoff.
+
+We can see from the ACF plot that the transformation is not stationary.
+
+Constant variance for diff(diff(sqrt(total_cases))): Breusch-Pagan test
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mybptest(y)
+```
+We observed non-constant variance in the plot of diff(diff(sqrt(total_cases))), and the Breuch-Pagan test formally confirms it quantitatively.
+
+Independence via Box-Ljung test:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myboxljungtest(y,lags)
+```
+We fail to reject null hypothesis of independent lags of diff(diff(sqrt(total_cases))), as the Box Ljung test implies dependency in the data over 30 lags.
+
+
+
+## 2. Moving Average (MA) Models (20 points)
+
+2.1. Use the ACF to determine the order to fit a MA model. Justify your choice of order.
+
+ACF Plot of diff(diff(sqrt(total_cases))):
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggAcf(y)
+```
+From the rule of thumb document, with an ACF plot 'the function drops off to 0 after lag q (i.e. D(q)).' Based on the ACF plot above, the dropoff to 0 is at lag 10; lag 10 is after lag 9 (with q=9, D(q)=D(9)), therefore we could propose a 9th-order moving-average model, or MA(9).
+
+A summary of MA(9) is as follows:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+q <- 9
+m <- Arima(y,order=c(0,0,q),include.mean=F)  # assumes trend-stationary
+summary(m)
+```
+
+
+2.2. Use the command auto.arima($y, \, d = 0,\,max.p=0, \, stationary=TRUE$), where $y$ is your stationary $total\_cases$ time series, to find the MA order. Interpret and compare with your ACF choice. Give the model degrees of freedom (df).
+
+auto.arima() proposes using a 4th-order moving-average model, MA(4).
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+am <- auto.arima(y,d = 0,max.p=0,stationary=TRUE)
+summary(am)
+```
+auto.arima() MA(4) degrees of freedom: number of parameters, df(MA(4)) = 4
+
+MA(9) degrees of freedom: number of parameters, df(MA(9)) = 9
+
+Comparing models:
+
+MA(9) Check residuals:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+checkresiduals(m,lag=lags)
+```
+
+MA(4) Check residuals:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+checkresiduals(am,lag=lags)
+```
+From the plots above, plots of MA(9) and MA(4) look  similar, both showing zero mean and non-constant variance. The MA(4) ACF plot looks to be more stationary with more lags statistically 0 up to 30 lags.
+
+MA(9) T-Test for Mean 0:
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+rm <- resid(m)
+myttest(rm)
+```
+
+MA(4) T-Test for Mean 0:
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ram <- resid(am)
+myttest(ram)
+```
+Both MA(9) and MA(4) have mean zero since their respective 95% CI contains zero.
+
+MA(9) Skewness and Kurtosis:
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myskewtest(rm)
+mykurttest(rm)
+```
+
+MA(4) Skewness and Kurtosis:
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myskewtest(ram)
+mykurttest(ram)
+```
+MA(9) tends to skew more right compared to MA(4) but since both models do not have 0 skewness or 0 (excess) Kurtosis, they both do not have normal distribution and thus both do not conform to a Gaussian PDF.
+
+MA(9) Constant Variance:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mymcleodlitest(m)
+mybptest(rm)
+```
+
+MA(4) Constant Variance:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+#mymcleodlitest(resid(am))
+mybptest(ram)
+```
+As we've seen in the respective plots, both MA(9) and MA(4) exhibit non-constant variance. Using the McLeod-Li and Breusch-Pagan tests formally confirms it.
+
+Linear trend - MA(9):
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mykpsstest(rm)
+myadftest(rm,lags)
+```
+
+Linear trend - MA(4):
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mykpsstest(ram)
+myadftest(ram,lags)
+```
+The KPSS and ADF tests for MA(9) and MA(4) show no unit roots and no linear trends for both models and therefore are respectively trend stationary and random walk stationary.
+
+
+M(9) Lag independence: 
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myboxljungtest(rm,9)
+```
+
+M(4) Lag independence: 
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myboxljungtest(ram,4)
+```
+Via the Box-Ljung test, both MA(9) and MA(4) exhibit lag dependency over their respective number of lags.
+
+The tests performed above show that MA(9) and MA(4) are similar in their respects.
+
+We will compare their business cycles in section 2.3 and forecasts in sections 2.4 and 2.5.
+
+2.3. Construct a MA() model from either part 2.1. or part 2.2. Perform model checking to validate the fitted model. Interpret the diagnostics. What are the business cycles in the Covid data? What do they mean?
+
+MA(9) Business Cycles:
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+p2m <- c(1,-m$coef)
+s2m <- polyroot(p2m)
+unique(round(sapply(all_complex(s2m),period),digits=3))   # lengths of business cycles
+```
+
+MA(4) Business Cycles:
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+p2am <- c(1,-am$coef)
+s2am <- polyroot(p2am)
+unique(round(sapply(all_complex(s2am),period),digits=3))   # lengths of business cycles
+```
+MA(9) has 4 business cycles: 5.5-, 2-, 3-, and 23-month cycles, while MA(4) only has a 3.5-month business cycle. The less business cycles favor MA(4) as it shows more stationarity than MA(9).
+
+We can attempt to reduce the MA(9) model with the parameter test and identify statistically insignificant components:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+parameterTest(m)
+```
+From the parameter test, we have ma4, ma5,and ma9 that are statistically insignificant, and will remove them from the model, thus creating a MA() model reduced to 6 components.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+c1 <- c(NA,NA,NA,00,00,NA,NA,NA,00)
+m_red <- Arima(y,order=c(0,0,q),include.mean=F,fixed=c1)
+summary(m_red)
+```
+
+Reduced MA() Model: check residuals 
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+checkresiduals(m_red,lag=lags)
+```
+The residuals from the reduced model show a mean zero with non-constant variance. The distribution's high kurtosis and slight right skewness might not make it normal based on a Gaussian PDF. The ACF might show some stationarity but also shows a 6-lag peak-to-peak cycle. We will test the stationarity below.
+
+Reduced MA() Model:  t-test for mean 0
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+rm_red <- resid(m_red)
+# check mean 0
+myttest(rm_red)
+```
+From the t-test, the reduced MA() model's 95% CI contain zero, therefore can say the mean of the reduced model's is statistically zero.
+
+Reduced MA() Model: normalcy test via Skewness and Kurtosis
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# check normal: skew, kurt
+myskewtest(rm_red)
+mykurttest(rm_red)
+```
+The skewness and kurtosis high 95% confidence intervals show that is they are not zero, therefore the distribution is not normal based on a Gaussian PDF.
+
+Reduced MA() Model: Constant variance
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# constant variance
+mymcleodlitest(m_red)
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mybptest(rm_red)
+
+```
+The McLeod-Li and Breusch-Pagan tests show that the reduced MA() model's residuals has non-constant variance, which we've observed in the plot.
+
+
+Reduced MA() Model: Linear Trend
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# linear trend
+mykpsstest(rm_red)
+myadftest(rm_red,lags)
+```
+The KPSS and ADF tests show that the reduced MA() model is stationary.
+
+Reduced MA() Model: Lag Independence
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# independence
+myboxljungtest(rm_red,lags)
+```
+
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+#Identify business cycles: less -> better, simpler
+p2m_red <- c(1,-m_red$coef)
+s2m_red <- polyroot(p2m_red)
+unique(round(sapply(all_complex(s2m_red),period),digits=3))   # lengths of business cycles
+```
+The reduced MA() model has 4 business cycles: 5.5-, 2-, 3-, and 23-month cycles, similar to the full MA(9) model. In the spirit of parsimony, I would prefer this reduced model over the full MA(9) since it is a simpler model and the model diagnostics have similar results. 
+
+Comparing the reduced model to the auto.arima() MA(4) model, I would prefer the MA(4) model as the model diagnostics are similar to the reduced model but only has one business cycle and more stationarity in the residuals, thus favoring it via parsimony.
+
+
+2.4. Obtain 1-step to 7-step ahead points with 95% interval forecasts for the total cases data using the model you chose in part 2.3.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+fmm <- Arima(X$total_cases,order=c(0,1,4),include.mean=T,lambda="auto")  # use transformation
+ff <- forecast(fmm,h=(7))
+ff
+```
+Using the auto-arima MA(4) model:
+
+- total_cases forecast for the next 7 days on the lower 95% CI:
+
+96321776, 96129694, 95851771, 95524809, 95194178, 94927364, 94697581
+
+- total_cases forecast for the next 7 days on the upper 95% CI:
+
+96770784, 97061030, 97398963, 97729923, 98065067, 98336394, 98570689
+
+I would take the lower 95% CI forecast with a grain of salt to the number of total_cases decreasing. total_cases is a cumulative sum that is ever-increasing and would not go lower. 
+
+
+2.5. Forecast total cases with the forecast origin the last observed data point using the model you chose in part 2.3. Interpret.
+
+Using the auto-arima MA(4) model, we will generate a forecast plot for the next eight weeks:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+fm <- Arima(X$total_cases,order=c(0,1,4),include.mean=T,lambda="auto")  # use transformation
+f <- forecast(fm,h=(7*8))  # approx 8-week forecast
+autoplot(f)
+```
+From the forecast plot above, the MA(4) model's dark blue prediction line does not show much of a change from the last data point in the time series, while the 80% CI range shown by the blue area spreads out over an eight week period. The 95% CI range shown by the light blue area has a wider spread.
+
+As explained in section 2.4, I would take the lower CI section forecast with a grain of salt to the number of total_cases decreasing. total_cases is a cumulative sum that is ever-increasing and would not go lower. 
+
+Overall, while this was a good exercise in understanding MA() models, I would not recommend using the MA(4), MA(9), or the reduced MA() model to predict the growth of total covid cases as the prediction line is a straight horizontal line. Hopefully ARMA() models in the next section can show some improvement.
+
+
+
+## 3. Autoregressive Moving Average (ARMA) Models (20 points)
+
+3.1. Use the ACF and the PACF to determine the order to fit an ARMA model to the Covid data. Justify your choice of order.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+y <- ts(diff(sqrt(X[,2]),differences=2))
+ggAcf(y)
+```
+As shown in section 2.1, from the rule of thumb document, with an ACF plot 'the function drops off to 0 after lag q (i.e. D(q)).' Based on the ACF plot above, the dropoff to 0 is at lag 10; lag 10 is after lag 9 (with q=9, D(q)=D(9)), therefore we could propose q=9 in the ARMA() model.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggPacf(y)
+```
+From the rule of thumb document, with an PACF plot 'the function drops off to 0 after lag p (i.e. D(p)).' Based on the ACF plot above, the dropoff to 0 is at lag 15; lag 15 is after lag 14 (with p=14, D(q)=D(14)).
+
+Therefore we could propose an ARMA(14,9) model.
+
+A summary of ARMA(14,9) is as follows:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+p <- 14
+q <- 9
+m2 <- Arima(y,order=c(p,1,q),include.mean=F)  # assumes trend-stationary
+summary(m2)
+```
+
+3.2. Use the command auto.arima($y, \, d = 0, \, max.p=0, \, stationary=TRUE$), where $y$ is your stationary $total\_cases$ time series, to find the AR and MA orders. Interpret and compare with your ACF and PACF choices. Give the model degrees of freedom ($df$).
+
+auto.arima() proposes using an ARMA(2,2) model.
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+am2 <- auto.arima(y,d = 1,max.p=lags, max.q=lags,stationary=TRUE)
+summary(am2)
+```
+ARMA(2,2) degrees of freedom: number of parameters p+d+q = 2 + 0 + 2 = 4
+
+ARMA(14,1,9) degrees of freedom: number of parameters p+d+q = 14 + 1 + 9 = 24
+
+Comparing models:
+
+ARMA(14,9) Check residuals:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+checkresiduals(m2,lag=lags)
+```
+ARMA(2,2) Check residuals:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+checkresiduals(am,lag=lags)
+```
+From the plots above, plots of ARMA(14,9) and ARMA(2,2) look  similar, both showing zero mean and non-constant variance. The ARMA(14,9) ACF plot looks to be more stationary with more lags statistically 0 up to 30 lags.
+
+ARMA(14,9) T-Test for Mean 0:
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+rm2 <- resid(m2)
+myttest(rm2)
+```
+
+ARMA(2,2) T-Test for Mean 0:
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ram2 <- resid(am2)
+myttest(ram2)
+```
+Both ARMA(14,9) and ARMA(2,2) have mean zero since their respective 95% CI contains zero.
+
+ARMA(14,9) Skewness and Kurtosis:
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myskewtest(rm2)
+mykurttest(rm2)
+```
+
+ARMA(2,2) Skewness and Kurtosis:
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myskewtest(ram2)
+mykurttest(ram2)
+```
+ARMA(14,9) tends to skew more right compared to ARMA(2,2) but since both models do not have 0 skewness or 0 (excess) Kurtosis, they both do not have normal distribution and thus both do not conform to a Gaussian PDF.
+
+ARMA(14,9) Constant Variance:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mymcleodlitest(m2)
+```
+
+ARMA(2,2) Constant Variance:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mybptest(ram2)
+```
+As we've seen in the respective plots, both ARMA(14,9) and ARMA(2,2) exhibit non-constant variance. Using the McLeod-Li method for ARMA(14,9) and Breusch-Pagan for ARMA(2,2) formally confirms it.
+
+Linear trend - ARMA(14,9):
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mykpsstest(rm2)
+myadftest(rm2,lags)
+```
+
+Linear trend - ARMA(2,2):
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+mykpsstest(ram2)
+myadftest(ram2,lags)
+```
+The KPSS and ADF tests for ARMA(14,9) and ARMA(2,2) show no unit roots and no linear trends for both models and therefore are respectively trend stationary and random walk stationary.
+
+ARMA(14,9) Lag independence: 
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myboxljungtest(rm2,9)
+```
+
+ARMA(2,2) Lag independence: 
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+myboxljungtest(ram2,4)
+```
+Via the Box-Ljung test, both ARMA(14,9) and ARMA(2,2) exhibit lag dependency over their respective number of lags.
+
+The tests performed show that ARMA(14,9) and ARMA(2,2) are similar in those respects. We will compare their business cycles in section 3.3 and their forecasts in sections 3.4 and 3.5.
+
+3.3. Construct a ARMA() model from either part 3.1. or part 3.2. Perform model checking to validate the fitted model. Interpret the diagnostics. What are the business cycles in the Covid data? What do they mean?
+
+
+ARMA(14,9) Business Cycles:
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+p2m2 <- c(1,-m2$coef)
+s2m2 <- polyroot(p2m2)
+unique(round(sapply(all_complex(s2m2),period),digits=3))   # lengths of business cycles
+```
+
+ARMA(2,2) Business Cycles:
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+p2am2 <- c(1,-am2$coef)
+s2am2 <- polyroot(p2am2)
+unique(round(sapply(all_complex(s2am2),period),digits=3))   # lengths of business cycles
+```
+ARMA(14,9) has 8 business cycles: 2-, 3-, 4-, 6-, 7-, 8-, 28- and 41-month cycles. 
+
+ARMA(2,2) only has a single 6-month business cycle, which makes its residuals more stationary than ARMA(14,9).
+
+We can attempt to reduce the ARMA(14,9) model with the parameter test and identify statistically insignificant components:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+parameterTest(m2)
+```
+From the parameter test, we have ar3, ar4, ar5, ar6, ar9, ar10, ar11, ar14, ma2, ma3, ma4, ma5, ma6, and ma7 that are statistically insignificant, and will remove them from the model, thus creating an ARMA() model reduced from 23 components to 10 components.
+
+Here is the summary of the reduced ARMA() model:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+c2 <- c(NA,NA,00,00,00,NA,NA,NA,00,00,00,NA,NA,00,NA,00,00,00,00,00,00,NA,NA)
+m2_red <- Arima(y,order=c(14,1,9),include.mean=F,fixed=c2)
+summary(m2_red)
+```
+
+Reduced ARMA() Check Residuals:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+checkresiduals(m2_red,lag=lags)
+```
+The reduced ARMA() model have independent lags from the Box-Ljung test and show no autocorrelation, similar to the full ARMA(14,9) model's diagnostics in section 3.2. The ACF for the full model shows more stationarity compared to the reduced model but we can further test it. The plot of the residuals for the reduced model shows a mean 0 with non-constant variance. The distribution plot shows a highly-peaked plot indicating very high Kurtosis and the positive outliers indicating some right skewness, therefore the reduced model does not meet normalcy under a Gaussian PDF.
+
+Reduced ARMA() t-test mean of 0:
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+rm2_red <- resid(m2_red)
+# check mean 0
+myttest(rm2_red)
+```
+The 95% CI of the t-test contains zero, showing that the mean of the residuals of the reduced ARMA() model is statistically 0. With the mean zero, we've also removed the linear trend.
+
+Reduced ARMA() normal tests: skewness, Kurtosis
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# check normal: skew, kurt
+myskewtest(rm2_red)
+mykurttest(rm2_red)
+```
+While the distribution plot showed Skewness and Kurtosis, we formally calculate its presence, thus the model is not normal to a Gausian PDF.
+
+Reduced ARMA() constant variance:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# constant variance
+mymcleodlitest(m2_red)
+mybptest(rm2_red)
+```
+
+We've observed that the plot of the reduced ARMA() model shows non-constant variance, and the McLeod-Li and Breusch-Pagan tests formally confirm it.
+
+Reduced ARMA() linear trend test: 
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# linear trend
+mykpsstest(rm2_red)
+myadftest(rm2_red,lags)
+```
+While the full ARMA(14,9) model's ACF looks to be more stationary than the reduced ARMA() model, the KPSS and ADF tests show confirm the reduced model is stationary as well.
+
+Reduced ARMA() business cycles
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+#Identify business cycles: less -> better, simpler
+p2m2_red <- c(1,-m2_red$coef)
+s2m2_red <- polyroot(p2m2_red)
+unique(round(sapply(all_complex(s2m2_red),period),digits=3))   # lengths of business cycles
+```
+The reduced ARMA() model has 7 business cycles: 2-,3-,4-, 6-, 9-, 25-, and 37-month cycles, one less than the full ARMA(14,9) model. In the spirit of parsimony, I would prefer this reduced model over the full ARMA(14,9) since it is a much simpler model and the model diagnostics have similar results, and one less business cycle. The less business cycles the more stationary the model's residuals are.
+
+Comparing the ARMA(14,9) model with the reduced ARMA() model: AIC/BIC/RMSE/MAE
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+summary(m2)
+summary(m2_red)
+```
+Despite the lower AIC/BIC/RMSE/MAE for the full ARMA(14,9) model over the reduced ARMA() model, as we've seen in the other model diagnostics the models are very similar. More components in a model will always favor a larger model, especially a model that has 13 more components. That being said, the improvements in AIC/BIC/RMSE/MAE for the full model seem to be marginal, especially if it has 13 more components. I would still prefer the reduced model over the full model in the spirit of parsimony as the full model only has marginal gains at the cost of much higher complexity.
+
+Comparing the reduced ARMA() model with the auto-arima configured ARMA(2,2) model:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+summary(m2_red)
+summary(am2)
+```
+
+Comparing the reduced ARMA model to the auto-arima configured ARMA(2,2) model, we see that the reduced model's AIC, BIC, RMSE, and MAE are lower than the ARMA(2,2) model, indicating worse performance in the ARMA(2,2) model. We see these differences are not marginal, such as the difference between the AIC of both models is almost 500, almost a 10% difference. While the reduced ARMA() model is more complex with 10 components compared to the ARMA(2,2) model, the AIC, BIC, RMSE, and MAE significantly favor the reduced ARMA() model over the ARMA(2,2) model determined by auto-arima.
+
+3.4. Obtain 1-step to 7-step ahead points with 95% interval forecasts for the $total\_cases$ data using the model you chose in part 3.3.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+fmm2 <- Arima(X$total_cases,order=c(14,1,9),include.mean=T,lambda="auto", fixed=c2)  # use transformation
+fcc2 <- forecast(fmm2,h=(7))  # approx 8-week forecast
+fcc2
+```
+Using the reduced ARMA() model:
+
+- total_cases forecast for the next 7 days on the lower 95% CI:
+
+96421543, 96384912, 96340644, 96269587, 96210531, 96175832, 96132204
+
+- total_cases forecast for the next 7 days on the upper 95% CI:
+
+96682543, 96837026, 96962711, 97038620, 97109289, 97190580, 97291520
+
+I would take the lower 95% CI forecast with a grain of salt to the number of total_cases decreasing. total_cases is a cumulative sum that is ever-increasing and would not go lower.
+
+3.5. Forecast total cases with the forecast origin the last observed data point using the model you chose in part 2.3. Interpret.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+fm2 <- Arima(X$total_cases,order=c(14,1,9),include.mean=T,lambda="auto", fixed=c2)  # use transformation
+f2 <- forecast(fm2,h=(7*8))  # approx 8-week forecast
+autoplot(f2)
+```
+From the plot above, we observe the dark blue prediction line gently curving into a plateau of total_cases but still gradually increasing. The 80% CI shown by the blue area show a 'coning out' spread, while the 95% CI shown by the light blue area show a wider 'coning out' spread.
+
+As explained in section 3.4, I would take the lower CI section forecast with a grain of salt to the number of total_cases decreasing. total_cases is a cumulative sum that is ever-increasing and would not go lower. 
+
+
+## 4. Report (20 points)
+
+Choose the __"best"__ model outcomes from the parts above. Write an executive report with information from the analysis such as forecasts from which decisions or actions can be made or taken.
+
+(Based on the analysis, modelling, testing, and forecasting performed in sections 2 and 3, we will use the reduced ARMA(14,9) model for our forecasting executive report.)
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+fm2 <- Arima(X$total_cases,order=c(14,1,9),include.mean=T,lambda="auto", fixed=c2)  # use transformation
+f2 <- forecast(fm2,h=(7*8))  # approx 8-week forecast
+autoplot(f2)
+```
+
+This forecasting model attempts to predict the total number of COVID-19 cases in the United States over the next eight weeks. The data is sourced from the Our World in Data GitHub page, with daily US COVID-19 data starting from the first detected case in the nation on January 20, 2022. The model presented here is based on a model originally consisting of twenty-three parameters fitted by the time series data and has been optimized and simplified down to ten.
+
+The forecast model shows the dark blue point forecast line gently curving into a plateau from the last data point of 96481081 total cases on October 4, 2022, but still shows a gradual increase in COVID-19 cases. Given the current pandemic's situation there doesn't seem to be major signs which could spark a sudden surge like what we've seen during the winter season of last year. The forecast looks to take a more conservative approach in future growth. In addition to the point forecast line we also have an 80% confidence interval (CI) shown by the blue area of possible values that could occur, as well as a 95% CI expanded in the lighter blue area. The range of these CIs expand quickly over the 8-week prediction period, showing the model to be less accurate in predicting total cases in much later dates. That being said, we should disregard the area below the forecast line as number of total cases is an ever-growing cumulative sum and cannot go down.
+
+As for the model itself, given the current tools and methodologies we have at our disposal this is the most accurate model we've created so far in predicting future total cases of COVID-19. The range of possible future total cases eight weeks ahead seem to be fairly large and do not recommend to use this model for long-term planning. Short-term forecasts from the model, such as the next three or four days, can give us a modest idea of what to anticipate during that time to plan staffing for testing and vaccination at health centers, as well as manage supplies as needed.
+
+As more data is collected for future dates, and as our own toolset and knowledge base expands, we will keep improving upon this model in an iterative fashion to hopefully provide a more accurate long-term forecast.
+
